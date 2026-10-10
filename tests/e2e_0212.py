@@ -38,7 +38,7 @@ def results(t, name):
     return [e["data"] for e in t["events"] if e["type"] == "tool_result" and e["data"]["name"] == name]
 
 
-c.put(B + "/api/settings", json={"language": "zh"}, headers=H)
+c.put(B + "/api/settings", json={"language": "zh", "ui_language": "zh"}, headers=H)   # the UI checks read Chinese labels
 
 # ================================================================ 1. grounded choice cards
 t, conv = run("CHOICES find me a nice iPhone case and let me pick")
