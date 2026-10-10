@@ -1992,7 +1992,7 @@ async def proxy(path: str, request: Request):
 def _asset_ver() -> str:
     """Version tag for cache-busting: changes whenever app.js/app.css change (e.g. after a hot patch)."""
     m = 0.0
-    for f in ("app.js", "app.css", "i18n.js"):
+    for f in ("app.js", "app.css", "i18n.js", "i18n_tw.js"):
         try:
             m = max(m, os.path.getmtime(os.path.join(WEB_DIR, f)))
         except OSError:
@@ -2011,7 +2011,7 @@ async def index(request: Request):
     with open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8") as fh:
         html = fh.read()
     v = _asset_ver()
-    for f in ("app.js", "app.css", "i18n.js"):
+    for f in ("app.js", "app.css", "i18n.js", "i18n_tw.js"):
         html = html.replace(f'static/{f}"', f'static/{f}?v={v}"')
     return Response(html, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
 
