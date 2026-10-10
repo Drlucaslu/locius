@@ -569,6 +569,7 @@ function taskCard(t) {
     h('div', { class: 'head' }, pill(t.status),
       h('span', { class: 'goal', title: t.goal }, t.plan && t.plan.objective ? t.plan.objective : t.goal),
       active && t.status !== 'WAITING_APPROVAL' ? h('span', { class: 'typing dots' }, t.status === 'PLANNING' ? T('规划中') : T('执行中')) : null,
+      active ? h('span', { class: 'small retry', style: 'color:var(--warn)', hidden: true }) : null,
       h('a', { class: 'small', href: '#tasks/' + t.id }, T('详情 Details'))),
     planList(t.plan),
     t.status === 'WAITING_APPROVAL' && t.waiting ? h('div', { class: 'row', style: 'margin-top:8px' },
@@ -618,6 +619,7 @@ function evLine(e) {
     case 'context_site': body = h('span', null, Tf("🧠 记得在 {0} 的习惯：{1}", d.site, (d.facts || []).join(T('；')))); break;
     case 'profile_read': body = h('span', { class: 'muted' }, Tf("🪪 读取档案：{0}", (d.fields || []).join(', ') || T('全部'))); break;
     case 'replanning': body = h('span', { style: 'color:var(--warn)' }, T('🔄 重新规划 Re-plan')); break;
+    case 'llm_retry': body = h('span', { style: 'color:var(--warn)' }, Tf("🔁 模型重试 {0}/{1}：{2}，{3} 秒后再试", d.attempt, d.of, d.reason || '', d.wait_s)); break;
     case 'chart': body = h('span', null, Tf("📊 图表：{0}", (d.title || d.path || ''))); break;
     case 'image': body = h('span', null, Tf("🎨 生成图片：{0}", ((d.paths || []).join(', ') || d.path || '') + (d.model ? '  (' + d.model + ', ' + (d.size || '') + ', ' + (d.latency_s || '') + 's)' : ''))); break;
     case 'gave_up': body = h('span', { style: 'color:var(--warn)' }, T('🛑 同样的来源反复失败，停止重试，按已有信息作答')); break;
@@ -2274,6 +2276,9 @@ function onEvent(ev) {
   } else if (ev.kind === 'task_event') {
     const tl = document.getElementById('tl-' + ev.task_id);
     if (tl && tl.closest('details').open && ev.type !== 'thinking') { if (tl.querySelector('.muted.small')) tl.innerHTML = ''; tl.append(evLine(ev)); }
+    // the model call is being retried: say so on the card ("Retrying 1 of 3"); the next event clears it
+    const rt = document.querySelector('#tc-' + ev.task_id + ' .retry');
+    if (rt) { if (ev.type === 'llm_retry') { rt.textContent = Tf("🔁 重试中 {0}/{1}（{2}，{3} 秒后）Retrying", ev.data.attempt, ev.data.of, ev.data.reason || '', ev.data.wait_s); rt.hidden = false; } else rt.hidden = true; }
     if (ev.type === 'plan' && S.tasks[ev.task_id]) { S.tasks[ev.task_id].plan = ev.data; const card = document.getElementById('tc-' + ev.task_id);
       if (card && S.view === 'chat') card.parentElement.replaceWith(taskCard(S.tasks[ev.task_id])); }
   } else if (ev.kind === 'conv_update') {

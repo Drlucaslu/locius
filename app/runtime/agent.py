@@ -789,7 +789,7 @@ class Runtime:
     def __init__(self, data_dir: str, publish):
         self.store = RStore(data_dir)
         self.publish = publish            # async fn(event: dict)
-        self.llm = LLM(self.store.settings, on_call=self._on_llm_call)
+        self.llm = LLM(self.store.settings, on_call=self._on_llm_call, on_retry=self._on_llm_retry)
         self._last_image: dict[str, str] = {}   # task_id -> latest generated/edited image (edit_image / vary_image default)
         self._img_count: dict[str, int] = {}    # task_id -> pictures generated so far (cost guard, IMAGE_BUDGET_PER_TASK)
         self.running: dict[str, asyncio.Task] = {}
@@ -848,6 +848,11 @@ class Runtime:
                 await self.publish({"kind": "conv_update", "conv_id": cid})
         except Exception as e:   # a title is a nicety: never let it touch the task
             print(f"[title] {cid}: {type(e).__name__}: {str(e)[:120]}", flush=True)
+
+    async def _on_llm_retry(self, info: dict):
+        """A model call failed and will be retried: tell the task's live view ("Retrying 1 of 3")."""
+        if info.get("task_id"):
+            await self.event(info["task_id"], "llm_retry", {k: info[k] for k in ("attempt", "of", "wait_s", "reason", "source", "purpose")})
 
     async def _on_llm_call(self, info: dict):
         await self.audit("llm", f"model.{info['purpose']}", info.get("task_id", ""), resource=info.get("model", ""),

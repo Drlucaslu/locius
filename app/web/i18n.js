@@ -907,5 +907,7 @@ window.OMUSE_EN = {
 "只影响界面文字。「跟随浏览器」= 英文、简体或繁体浏览器各看各的；选定一种后，你在任何设备上登录都用它。": "Only the interface text. 'Follow the browser' shows English, Simplified or Traditional Chinese per browser; pick one and every device you sign in from uses it.",
 "外观": "Theme",
 "Agent 用这个语言思考和工作：思考过程、任务计划、回答、通知和定时任务的汇报。界面语言在上面的「界面」里单独设置。": "The agent thinks and works in this language: its reasoning, task plans, answers, notifications and schedule reports. The interface language is set separately under Interface above.",
-"Agent 语言": "Agent language"
+"Agent 语言": "Agent language",
+"🔁 模型重试 {0}/{1}：{2}，{3} 秒后再试": "🔁 Model retry {0} of {1}: {2}; trying again in {3} s",
+"🔁 重试中 {0}/{1}（{2}，{3} 秒后）Retrying": "🔁 Retrying {0} of {1} ({2}; in {3} s)"
 };
