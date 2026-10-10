@@ -3,12 +3,17 @@
 'use strict';
 
 // ------------------------------------------------------------------ i18n
-// UI strings are written in Chinese in the source and wrapped in T()/Tf(); English comes from i18n.js.
+// UI strings are written in Simplified Chinese in the source and wrapped in T()/Tf(); English comes from i18n.js and
+// Traditional Chinese from i18n_tw.js. The UI language is Settings → ui_language, or the browser's language when that is
+// empty; localStorage only caches it for the first paint (syncLang reloads if the server says otherwise).
+const UI_LANGS = ['en', 'zh', 'tw'];
+const browserLang = () => { const l = (navigator.language || '').toLowerCase(); return !l.startsWith('zh') ? 'en' : /tw|hk|mo|hant/.test(l) ? 'tw' : 'zh'; };
 const LANG = (() => {
-  try { const v = localStorage.getItem('omuse_lang'); if (v === 'zh' || v === 'en') return v; } catch (e) { /* storage blocked */ }
-  return /^zh/i.test(navigator.language || '') ? 'zh' : 'en';
+  try { const v = localStorage.getItem('omuse_ui'); if (UI_LANGS.includes(v)) return v; } catch (e) { /* storage blocked */ }
+  return browserLang();
 })();
 const EN = window.OMUSE_EN || {};
+const TW = window.OMUSE_TW || {};
 const CJK_RE = /[一-鿿]/;
 // Fallback for dynamic bilingual text from the server, e.g. "发送邮件 Send email" or "已拒绝 (user denied)".
 function biEn(s) {
@@ -23,26 +28,42 @@ function biEn(s) {
   if (m) return (m[1] || '') + m[2];
   return s;
 }
-function T(s) { return LANG === 'en' ? (EN[s] ?? biEn(s)) : s; }
-function Tf(s, ...a) { return (LANG === 'en' ? (EN[s] ?? s) : s).replace(/\{(\d+)\}/g, (_, i) => (a[i] ?? '')); }
+function T(s) { return LANG === 'en' ? (EN[s] ?? biEn(s)) : LANG === 'tw' ? (TW[s] ?? s) : s; }
+function Tf(s, ...a) { return (LANG === 'en' ? (EN[s] ?? s) : LANG === 'tw' ? (TW[s] ?? s) : s).replace(/\{(\d+)\}/g, (_, i) => (a[i] ?? '')); }
 const B = s => (LANG === 'en' ? biEn(String(s ?? '')) : s);   // server-provided bilingual text
-document.documentElement.lang = LANG === 'en' ? 'en' : 'zh-CN';
-// The language lives in Settings (server side) so the agent uses it too; localStorage only caches it for the first paint.
-// First visit (language never chosen): take the browser's language and save it, so an English browser gets an English agent.
+const ZH = s => (LANG === 'tw' ? (TW[s] ?? s) : s);           // server-provided Simplified labels (domains, profile fields)
+document.documentElement.lang = { en: 'en', zh: 'zh-CN', tw: 'zh-TW' }[LANG];
+// The theme is a server setting too (auto / ink / paper); localStorage caches it so the first paint has no flash.
+function applyTheme(t) {
+  t = t === 'ink' || t === 'paper' ? t : 'auto';
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem('omuse_theme', t); } catch (e) { /* ignore */ }
+}
+// Settings decide the UI language (ui_language; "" = follow the browser) and the theme. The agent's own language
+// (language) is separate; on the first visit it is filled from the browser, so an English browser gets an English agent.
 async function syncLang() {
   try {
     const r = await api('settings');
-    const srv = (r.settings || {}).language;
-    if (srv === 'en' || srv === 'zh') {
-      if (srv !== LANG) { try { localStorage.setItem('omuse_lang', srv); } catch (e) { /* ignore */ } location.reload(); }
-    } else {
-      await api('settings', { method: 'PUT', body: { language: LANG } });
-    }
+    const s = r.settings || {};
+    applyTheme(s.theme);
+    const want = UI_LANGS.includes(s.ui_language) ? s.ui_language : browserLang();
+    try { localStorage.setItem('omuse_ui', want); } catch (e) { /* ignore */ }
+    if (want !== LANG) { location.reload(); return; }
+    if (s.language !== 'en' && s.language !== 'zh') await api('settings', { method: 'PUT', body: { language: LANG === 'en' ? 'en' : 'zh' } });
   } catch (e) { /* offline: keep the cached choice */ }
 }
 function i18nStatic() {
-  if (LANG !== 'en') return;
   const set = (sel, text, attr) => { const el = document.querySelector(sel); if (el) { if (attr) el.setAttribute(attr, text); else el.textContent = text; } };
+  if (LANG === 'tw') {   // the static strings of index.html, Traditional (i18n-ok: not T() keys)
+    set('.brand small', '專屬電腦上的私人 Agent');   // i18n-ok
+    set('#menuBtn', '選單 Menu', 'aria-label');   // i18n-ok
+    set('#viewTitle', '對話');   // i18n-ok
+    set('#approvalBell', '審批 Approvals', 'aria-label'); set('#approvalBell span', '審批');   // i18n-ok
+    set('.drawer-head h2', '待審批 Approvals'); set('#drawerClose', '關閉', 'aria-label');   // i18n-ok
+    set('#drawer > p', '由 Sentinel 獨立發起，與對話分離。Agent 在你決定前會暫停。');   // i18n-ok
+    return;
+  }
+  if (LANG !== 'en') return;
   set('.brand small', 'Private agent on its own computer');
   set('#menuBtn', 'Menu', 'aria-label');
   set('#viewTitle', 'Chat');
@@ -1846,11 +1867,11 @@ async function viewMemory(root) {
     h('div', { style: 'margin-top:16px' }, memEpisodesCard(r)));
 }
 
-const domLabel = (r, k) => { const d = (r.domains || []).find(x => x.key === k); return d ? (LANG === 'en' ? d.en : d.zh) : (k || ''); };
+const domLabel = (r, k) => { const d = (r.domains || []).find(x => x.key === k); return d ? (LANG === 'en' ? d.en : ZH(d.zh)) : (k || ''); };
 
 function memDomainSelect(r, value, onchange) {
   const sel = h('select', { 'aria-label': T('域 Domain'), style: 'width:auto;flex:0 0 auto;padding:2px 6px;font-size:12px' },
-    (r.domains || []).map(d => h('option', { value: d.key }, LANG === 'en' ? d.en : d.zh)));
+    (r.domains || []).map(d => h('option', { value: d.key }, LANG === 'en' ? d.en : ZH(d.zh))));
   sel.value = value || 'work';
   if (onchange) sel.onchange = () => onchange(sel.value);
   return sel;
@@ -1908,7 +1929,7 @@ function memProfileCard(r) {
   const inputs = {};
   const rows = (r.profile_fields || []).map(f => {
     const i = h('input', { type: 'text', value: prof[f.key] || '', autocomplete: 'off' }); inputs[f.key] = i;
-    return h('label', { class: 'field' }, h('span', null, LANG === 'en' ? f.en : f.zh), i);
+    return h('label', { class: 'field' }, h('span', null, LANG === 'en' ? f.en : ZH(f.zh)), i);
   });
   for (const k of Object.keys(prof).filter(k => k.startsWith('custom:'))) {
     const i = h('input', { type: 'text', value: prof[k], autocomplete: 'off' }); inputs[k] = i;
@@ -1933,7 +1954,7 @@ function memProfileCard(r) {
 
 function memPendingCard(r) {
   const list = r.pending || [];
-  const label = (k) => { const f = (r.profile_fields || []).find(x => x.key === k); return f ? (LANG === 'en' ? f.en : f.zh) : k.replace(/^custom:/, ''); };
+  const label = (k) => { const f = (r.profile_fields || []).find(x => x.key === k); return f ? (LANG === 'en' ? f.en : ZH(f.zh)) : k.replace(/^custom:/, ''); };
   return h('div', { class: 'card stack' },
     h('div', { class: 'row' }, h('h3', { style: 'flex:1' }, T('📝 待确认的档案修改 Pending')), list.length ? h('span', { class: 'chip bad' }, String(list.length)) : h('span', { class: 'chip ok' }, T('无 None'))),
     list.length ? list.map(p => {
@@ -2012,7 +2033,7 @@ function memFactsCard(r) {
   let cur = S.memDomain || '';
   const chips = h('div', { class: 'row', style: 'flex-wrap:wrap;gap:6px' });
   const draw = () => {
-    chips.replaceChildren(...[['', T('全部 All'), r.facts.length], ...(r.domains || []).map(d => [d.key, LANG === 'en' ? d.en : d.zh, counts[d.key] || 0])]
+    chips.replaceChildren(...[['', T('全部 All'), r.facts.length], ...(r.domains || []).map(d => [d.key, LANG === 'en' ? d.en : ZH(d.zh), counts[d.key] || 0])]
       .map(([k, label, n]) => h('button', { class: 'chip' + (k === cur ? ' ok' : ''), style: 'cursor:pointer', onclick: () => { cur = k; S.memDomain = k; draw(); } }, `${label} ${n}`)));
     body.replaceChildren(...r.facts.filter(f => !cur || (f.domain || 'work') === cur).map(f => memFactRow(f, false, r)));
   };
@@ -2114,6 +2135,7 @@ async function viewSettings(root) {
   const testOut = h('span', { class: 'small muted' });
   const imgOut = h('span', { class: 'small muted' });
   root.append(h('div', { class: 'grid2' },
+    interfaceCard(s, f),
     h('div', { class: 'card stack' }, h('h3', null, T('🧠 模型 Model')),
       h('p', { class: 'sub' }, T('任何 OpenAI 兼容接口都可以用。每类请求可以交给不同的提供商，没有哪家模型提供商能看到你的全部信息；推理、网页浏览和工具调用都在云端完成。')),
       field('model_base_url', T('接口地址'), 'Base URL'), field('model_name', T('执行模型'), 'Model'),
@@ -2146,7 +2168,9 @@ async function viewSettings(root) {
     const body = {};
     for (const [k, el] of Object.entries(f)) body[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
     await api('settings', { method: 'PUT', body }); toast(T('已保存 Saved')); refreshModelChip();
-    if (body.language && body.language !== LANG) { try { localStorage.setItem('omuse_lang', body.language); } catch (e) { /* ignore */ } location.reload(); }
+    applyTheme(body.theme);
+    const want = UI_LANGS.includes(body.ui_language) ? body.ui_language : browserLang();
+    if (want !== LANG) { try { localStorage.setItem('omuse_ui', want); } catch (e) { /* ignore */ } location.reload(); }
   }) }, T('保存设置 Save settings'))));
   // standalone installs (OMUSE_PASSWORD): change the login password
   const pw = await sapi('password').catch(() => null);
@@ -2197,6 +2221,27 @@ function subscriptionCard(sub) {
     }) }, T('打开订阅页面 Open subscription page'))));
 }
 
+// UI language and theme: per install (Settings), so every browser the user signs in from looks the same.
+function interfaceCard(s, f) {
+  const ui = h('select', { 'aria-label': 'UI language' },
+    h('option', { value: '' }, T('跟随浏览器 Follow browser')),
+    h('option', { value: 'en' }, 'English'),  // i18n-ok: language names are shown in their own language
+    h('option', { value: 'zh' }, '简体中文'),  // i18n-ok
+    h('option', { value: 'tw' }, '繁體中文'));  // i18n-ok
+  ui.value = UI_LANGS.includes(s.ui_language) ? s.ui_language : '';
+  f.ui_language = ui;
+  const th = h('select', { 'aria-label': 'Theme' },
+    h('option', { value: 'auto' }, T('跟随系统 Follow system')),
+    h('option', { value: 'paper' }, T('Paper（米白）')),
+    h('option', { value: 'ink' }, T('Ink（深色）')));
+  th.value = s.theme === 'ink' || s.theme === 'paper' ? s.theme : 'auto';
+  f.theme = th;
+  return h('div', { class: 'card stack', id: 'interface' }, h('h3', null, T('🖥 界面 Interface')),
+    h('label', { class: 'field' }, h('span', null, T('界面语言'), LANG === 'en' ? null : h('span', { class: 'muted' }, ' UI language')), ui,
+      h('div', { class: 'small muted', style: 'font-weight:400' }, T('只影响界面文字。「跟随浏览器」= 英文、简体或繁体浏览器各看各的；选定一种后，你在任何设备上登录都用它。'))),
+    h('label', { class: 'field' }, h('span', null, T('外观'), LANG === 'en' ? null : h('span', { class: 'muted' }, ' Theme')), th));
+}
+
 function langField(s, f) {
   const sel = h('select', { 'aria-label': 'Language' },
     h('option', { value: 'zh' }, '中文'),  // i18n-ok: language names are shown in their own language
@@ -2209,8 +2254,8 @@ function langField(s, f) {
   rep.value = s.reply_language === 'match' ? 'match' : '';
   f.reply_language = rep;
   return h('div', null,
-    h('label', { class: 'field' }, h('span', null, T('语言'), LANG === 'en' ? null : h('span', { class: 'muted' }, ' Language')), sel,
-      h('div', { class: 'small muted', style: 'font-weight:400' }, T('界面和 Agent 都用这个语言：思考过程、任务计划、回答、通知和定时任务的汇报。选 English 就全部用英文。'))),
+    h('label', { class: 'field' }, h('span', null, T('Agent 语言'), LANG === 'en' ? null : h('span', { class: 'muted' }, ' Agent language')), sel,
+      h('div', { class: 'small muted', style: 'font-weight:400' }, T('Agent 用这个语言思考和工作：思考过程、任务计划、回答、通知和定时任务的汇报。界面语言在上面的「界面」里单独设置。'))),
     h('label', { class: 'field' }, h('span', null, T('回答语言')), rep,
       h('div', { class: 'small muted', style: 'font-weight:400' }, T('选「跟随我提问用的语言」时，每个任务按你那条消息的语言来思考和回答；界面、通知和定时任务汇报仍用上面的语言。'))));
 }

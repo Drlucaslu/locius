@@ -64,7 +64,9 @@ DEFAULT_SETTINGS = {
     "max_tokens": 4096,
     "timezone": os.environ.get("TZ", "Asia/Singapore"),
     "user_name": "",
-    "language": "",          # "" = not chosen yet: the web UI fills it from the browser language on first visit
+    "language": "",          # the agent's language (zh / en); "" = not chosen yet: filled from the browser on first visit
+    "ui_language": "",       # the web UI's language: "" = follow the browser (en / zh / tw), or one of those
+    "theme": "auto",         # web UI theme: auto (follow the system) / ink (dark) / paper (off-white)
     "reply_language": "",    # "" = answer in Settings → Language; "match" = answer in the language of each request
     "memory_extraction": True,
     "memory_consolidation": True,     # tidy memory once a day (merge, promote, expire) and send a short report

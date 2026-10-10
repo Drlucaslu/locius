@@ -612,7 +612,6 @@ window.OMUSE_EN = {
 "重新连接 Reconnect": "Reconnect",
 "，新建一个项目（名字随意，如 OMuse）": " and create a project (any name, e.g. OMuse)",
 "📅 Google 日历 Google Calendar": "📅 Google Calendar",
-"界面和 Agent 都用这个语言：思考过程、任务计划、回答、通知和定时任务的汇报。选 English 就全部用英文。": "Used by the interface and the agent: its reasoning, task plans, answers, notifications and scheduled-task reports. Choose English and everything is in English.",
 "语言": "Language",
 "回答语言": "Reply language",
 "和上面的语言一致": "Same as the language above",
@@ -898,5 +897,15 @@ window.OMUSE_EN = {
 "再输一次新密码": "New password again",
 "两次输入的新密码不一样": "The two new passwords differ",
 "密码已修改，请用新密码重新登录": "Password changed; sign in again with the new password",
-"修改密码 Change password": "Change password"
+"修改密码 Change password": "Change password",
+"跟随浏览器 Follow browser": "Follow the browser",
+"跟随系统 Follow system": "Follow the system",
+"Paper（米白）": "Paper (off-white)",
+"Ink（深色）": "Ink (dark)",
+"🖥 界面 Interface": "🖥 Interface",
+"界面语言": "UI language",
+"只影响界面文字。「跟随浏览器」= 英文、简体或繁体浏览器各看各的；选定一种后，你在任何设备上登录都用它。": "Only the interface text. 'Follow the browser' shows English, Simplified or Traditional Chinese per browser; pick one and every device you sign in from uses it.",
+"外观": "Theme",
+"Agent 用这个语言思考和工作：思考过程、任务计划、回答、通知和定时任务的汇报。界面语言在上面的「界面」里单独设置。": "The agent thinks and works in this language: its reasoning, task plans, answers, notifications and schedule reports. The interface language is set separately under Interface above.",
+"Agent 语言": "Agent language"
 };

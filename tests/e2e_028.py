@@ -53,10 +53,12 @@ async def ui():
         await pg.wait_for_timeout(1200)
         sel = pg.locator("select[aria-label=Language]")
         check("Settings has a Language selector set to English", await sel.count() == 1 and await sel.input_value() == "en")
-        check("English help text under it", await pg.locator("text=Choose English and everything is in English").count() == 1)
+        check("English help text under it", await pg.locator("text=The agent thinks and works in this language").count() == 1)
         await pg.screenshot(path="/tmp/claude-0/settings-lang-en.png", full_page=False)
-        # switch to Chinese in Settings -> saved on the server, page reloads in Chinese
+        # the UI language is its own setting ("" = follow the browser): pick Simplified for the UI and the agent -> saved on
+        # the server, page reloads in Chinese
         await sel.select_option("zh")
+        await pg.locator("select[aria-label='UI language']").select_option("zh")
         await pg.get_by_role("button", name="Save settings").click()
         await pg.wait_for_timeout(2500)
         check("switching to 中文 in Settings saves language=zh", c.get(B + "/api/settings").json()["settings"]["language"] == "zh")
@@ -67,6 +69,46 @@ async def ui():
         await pg2.goto(B + "/#settings")
         await pg2.wait_for_timeout(2500)
         check("other devices follow the saved language", await pg2.locator("text=保存设置 Save settings").count() == 1)
+        # back to "follow the browser": each browser gets its own language — including Traditional Chinese
+        c.put(B + "/api/settings", json={"ui_language": ""}, headers=H)
+        pg3 = await (await b.new_context(locale="zh-TW")).new_page()
+        await pg3.goto(B + "/#settings")
+        await pg3.wait_for_timeout(2500)
+        check("a Traditional Chinese browser gets the Traditional UI", await pg3.locator("text=儲存設定 Save settings").count() == 1
+              and await pg3.evaluate("document.documentElement.lang") == "zh-TW")
+        check("the agent language is untouched by the UI language", c.get(B + "/api/settings").json()["settings"]["language"] == "zh")
+        pg4 = await (await b.new_context(locale="en-US")).new_page()
+        await pg4.goto(B + "/#settings")
+        await pg4.wait_for_timeout(2500)
+        check("an English browser gets English while the agent speaks Chinese", await pg4.locator("text=Save settings").count() == 1
+              and await pg4.locator("text=保存设置").count() == 0)
+        # a chosen UI language wins over the browser, on every device
+        c.put(B + "/api/settings", json={"ui_language": "tw"}, headers=H)
+        await pg4.reload()
+        await pg4.wait_for_timeout(2500)
+        check("UI language = Traditional applies to an English browser too", await pg4.locator("text=儲存設定 Save settings").count() == 1)
+        await pg4.screenshot(path="/tmp/claude-0/settings-lang-tw.png", full_page=False)
+        # theme: Ink / Paper from Settings; "auto" follows the system
+        await pg4.locator("select[aria-label=Theme]").select_option("ink")
+        await pg4.get_by_role("button", name="儲存設定 Save settings").click()
+        await pg4.wait_for_timeout(1500)
+        check("Ink theme saved and applied", c.get(B + "/api/settings").json()["settings"]["theme"] == "ink"
+              and await pg4.evaluate("document.documentElement.getAttribute('data-theme')") == "ink"
+              and await pg4.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(14, 17, 20)")
+        await pg4.screenshot(path="/tmp/claude-0/settings-ink.png", full_page=False)
+        pg5 = await (await b.new_context(locale="en-US", color_scheme="light")).new_page()
+        await pg5.goto(B + "/#chat")
+        await pg5.wait_for_timeout(1500)
+        check("the theme is per install: another browser also gets Ink", await pg5.evaluate("document.documentElement.getAttribute('data-theme')") == "ink")
+        c.put(B + "/api/settings", json={"theme": "paper"}, headers=H)
+        await pg5.reload()
+        await pg5.wait_for_timeout(1500)
+        check("Paper theme: off-white background", await pg5.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(244, 241, 234)")
+        pg6 = await (await b.new_context(locale="en-US", color_scheme="dark")).new_page()
+        await pg6.goto(B + "/#chat")
+        await pg6.wait_for_timeout(1500)
+        check("Paper overrides a dark system preference", await pg6.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(244, 241, 234)")
+        c.put(B + "/api/settings", json={"theme": "auto", "ui_language": ""}, headers=H)
         await b.close()
 
 
