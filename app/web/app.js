@@ -2334,11 +2334,15 @@ function resync() {
   refreshConv();
   if (S.view === 'tasks' && S.selTask) { const box = $('#taskDetail'); if (box) renderTaskDetail(box, S.selTask); }
 }
-setInterval(() => { if (!ES || ES.readyState === 2 || Date.now() - lastEv > 45000) connectStream(); }, 10000);
+// A hidden tab talks to the server not at all: the stream is closed and nothing polls, so an idle box can go to
+// sleep. When the tab is shown again the stream reconnects and the state that may have changed is re-read.
+setInterval(() => { if (!document.hidden && (!ES || ES.readyState === 2 || Date.now() - lastEv > 45000)) connectStream(); }, 10000);
 // safety net while a task in the open conversation is still running (costs one small request every 8 s)
 setInterval(() => { if (!document.hidden && S.view === 'chat' && convHasActiveTask()) refreshConv(); }, 8000);
+// approvals arrive as stream events (approval_requested); this poll only covers a stream that has gone quiet
+setInterval(() => { if (!document.hidden && ES && Date.now() - lastEv > 20000) loadApprovals(); }, 30000);
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) return;
+  if (document.hidden) { if (ES) { try { ES.close(); } catch (e) {} ES = null; } return; }
   if (!ES || ES.readyState === 2 || Date.now() - lastEv > 20000) connectStream(); else resync();
 });
 
@@ -2385,6 +2389,5 @@ i18nStatic();
   refreshModelChip();
   connectStream();
   loadApprovals();
-  setInterval(loadApprovals, 4000);
 })();
 })();
