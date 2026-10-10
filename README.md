@@ -107,6 +107,69 @@ fly deploy
 
 Then open `https://<app>.fly.dev` and sign in as `omuse`. The model endpoint and the other variables from the table above go in `[env]` in `fly.toml` (secrets with `fly secrets set`). Keep it at one machine: the state is on the volume.
 
+### Publish images for Products Provisioner
+
+`.github/workflows/release-image.yml` builds `Dockerfile.fly` for **linux/amd64**,
+tests the resulting image, pushes that same image to Fly's registry, then imports
+its immutable digest into Products Provisioner. It does not deploy customer
+instances or change their pinned image. No login password, LLM key, or Stripe key
+is baked into the image; those are supplied to each instance at runtime.
+
+Set these under GitHub **Settings → Secrets and variables → Actions**:
+
+| Kind | Name | Value |
+|---|---|---|
+| Variable | `LOCIUS_IMAGE_APP` | Globally unique Fly image-repository app name, e.g. `locius-images-test` |
+| Variable | `LOCIUS_FLY_ORG` | Fly organization slug for that repository app |
+| Variable | `RELEASE_PRODUCT_KEY` | Product key in the provisioner; defaults to `locius` (independent of the OMuse display name) |
+| Variable | `RELEASE_IMPORT_URL` | Provisioner HTTPS origin only, e.g. `https://product-provisioner.fly.dev` (no `/api/images` suffix) |
+| Secret | `FLY_API_TOKEN` | Token allowed to push images and create the repository app in the designated organization |
+| Secret | `RELEASE_IMPORT_TOKEN` | This product's image-source `callback_token`, **not** `PP_ADMIN_TOKEN` or `PP_MASTER_KEY` |
+
+Publish the product's callback configuration in the provisioner before the first
+automatic import. Configure its Fly credentials for the same organization that
+can pull the private image. The workflow creates the image-repository app if
+missing; that app stores images and does not need a running Machine or volume.
+
+After committing and pushing the workflow, tag the intended source commit:
+
+```bash
+git switch stripe-subscription
+git tag locius-v0.1.0
+git push origin locius-v0.1.0
+```
+
+Tag pushes run the workflow from the tagged commit, even while it lives on this
+branch. Manual dispatch becomes available once the workflow is on the default
+branch; choose the desired source branch and enter a `locius-v*` version. A manual
+run can disable `import_release` to publish an image before a product is ready.
+Use a new version for changed source; do not move existing release tags.
+
+Imports use `POST /api/images` with `product_key`, `version`, `image` (digest), and
+`parent_version: null`. The callback retries transient failures. The
+`image-manifest-<version>` Actions artifact retains the import JSON even if the
+callback fails. An identical version/digest import is idempotent.
+
+To verify a local image without any live credentials:
+
+```bash
+docker build --platform linux/amd64 -f Dockerfile.fly -t locius:local .
+bash tests/docker_image_smoke.sh locius:local
+```
+
+On an Apple Silicon Mac, `--platform linux/arm64` builds a native test image;
+the release workflow always builds AMD64 for Fly. The smoke test verifies all
+three services, login enforcement, unprivileged startup with a root-owned volume,
+Chromium PDF rendering, and settings/vault persistence after container replacement.
+It deletes only its own temporary containers and volume, leaving the image.
+
+Provisioner image settings should expose port **8080**, mount persistent storage
+at **`/omuse`**, and check **`/sentinel/api/health`**. No config file is required.
+Supply a generated `OMUSE_PASSWORD` and the environment variables documented above.
+Port 8083 is a separate optional phone service; publishing the main UI port does
+not expose it. Keep the app always-on if background schedules, event triggers,
+or Telegram polling must continue while no browser is open.
+
 ### Development
 
 ```bash

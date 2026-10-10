@@ -1,0 +1,139 @@
+name: Build application release image
+
+on:
+  push:
+    tags:
+      - "locius-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (for example locius-v0.1.0)
+        required: true
+        type: string
+      import_release:
+        description: Import into the configured Products Provisioner
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-image-${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPOSITORY: registry.fly.io/${{ vars.LOCIUS_IMAGE_APP }}
+  VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+  PRODUCT_KEY: ${{ vars.RELEASE_PRODUCT_KEY || 'locius' }}
+  IMPORT_RELEASE: ${{ github.event_name == 'push' || inputs.import_release }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate release configuration
+        env:
+          LOCIUS_IMAGE_APP: ${{ vars.LOCIUS_IMAGE_APP }}
+          LOCIUS_FLY_ORG: ${{ vars.LOCIUS_FLY_ORG }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          RELEASE_IMPORT_URL: ${{ vars.RELEASE_IMPORT_URL }}
+          RELEASE_IMPORT_TOKEN: ${{ secrets.RELEASE_IMPORT_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${LOCIUS_IMAGE_APP:?Set LOCIUS_IMAGE_APP}"
+          : "${LOCIUS_FLY_ORG:?Set LOCIUS_FLY_ORG}"
+          : "${FLY_API_TOKEN:?Set FLY_API_TOKEN}"
+          [[ "$VERSION" =~ ^locius-v[0-9][A-Za-z0-9._-]*$ && ${#VERSION} -le 128 ]]
+          [[ "$PRODUCT_KEY" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
+          if [[ "$IMPORT_RELEASE" == true ]]; then
+            : "${RELEASE_IMPORT_URL:?Set RELEASE_IMPORT_URL to the provisioner origin}"
+            : "${RELEASE_IMPORT_TOKEN:?Set the product callback token}"
+            [[ "$RELEASE_IMPORT_URL" =~ ^https://[^/?\#]+/?$ ]]
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build Fly image locally on runner
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --file Dockerfile.fly \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --tag "$IMAGE_REPOSITORY:$VERSION" \
+            --load .
+
+      - name: Smoke test image before publishing
+        run: bash tests/docker_image_smoke.sh "$IMAGE_REPOSITORY:$VERSION"
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Ensure image repository app exists in designated organization
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          LOCIUS_IMAGE_APP: ${{ vars.LOCIUS_IMAGE_APP }}
+          LOCIUS_FLY_ORG: ${{ vars.LOCIUS_FLY_ORG }}
+        run: |
+          if ! flyctl status --app "$LOCIUS_IMAGE_APP" >/dev/null 2>&1; then
+            flyctl apps create "$LOCIUS_IMAGE_APP" --org "$LOCIUS_FLY_ORG"
+          fi
+
+      - name: Log in to registry
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl auth docker
+
+      - name: Push the tested image and record immutable digest
+        id: image
+        run: |
+          docker push "$IMAGE_REPOSITORY:$VERSION"
+          image=$(docker image inspect "$IMAGE_REPOSITORY:$VERSION" --format '{{json .RepoDigests}}' |
+            jq -er --arg prefix "$IMAGE_REPOSITORY@sha256:" '.[] | select(startswith($prefix))' | head -1)
+          [[ "$image" =~ @sha256:[a-f0-9]{64}$ ]]
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          jq -n \
+            --arg product_key "$PRODUCT_KEY" \
+            --arg version "$VERSION" \
+            --arg image "$image" \
+            '{product_key: $product_key, version: $version, image: $image, parent_version: null}' \
+            > image-import.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image-manifest-${{ env.VERSION }}
+          path: image-import.json
+
+      - name: Import image into provisioner
+        if: env.IMPORT_RELEASE == 'true'
+        env:
+          RELEASE_IMPORT_URL: ${{ vars.RELEASE_IMPORT_URL }}
+          RELEASE_IMPORT_TOKEN: ${{ secrets.RELEASE_IMPORT_TOKEN }}
+        run: |
+          curl \
+            --fail-with-body \
+            --retry 8 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --header "Authorization: Bearer $RELEASE_IMPORT_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data-binary @image-import.json \
+            "${RELEASE_IMPORT_URL%/}/api/images"
+
+      - name: Publish summary
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          {
+            echo '### Locius / OMuse release image'
+            echo "- Product: $PRODUCT_KEY"
+            echo "- Version: $VERSION"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Image: $IMAGE"
+            echo "- Import requested: $IMPORT_RELEASE"
+          } >> "$GITHUB_STEP_SUMMARY"
