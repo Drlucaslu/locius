@@ -50,6 +50,10 @@ async def chat(req: Request):
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": {"message": "image input is not supported by this model"}}, status_code=400)
     sys = msgs[0]["content"] if msgs and msgs[0]["role"] == "system" else ""
+    if sys.startswith("You name conversations"):   # chat titles (agent._retitle)
+        last = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
+        users = re.findall(r"User: (.*)", str(last))   # the latest request: deterministic, and the title follows the chat
+        return reply("Topic: " + (users[-1].split()[0][:16] if users and users[-1].split() else "chat"))
     if sys.startswith("You look at a file"):   # file_look / attachment reading
         txt = json.dumps(msgs[-1]["content"])
         what = "a video contact sheet with numbered frames" if "contact sheet" in txt else "a red square labelled HELLO"

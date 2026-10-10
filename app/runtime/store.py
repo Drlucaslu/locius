@@ -198,6 +198,9 @@ class RStore:
     def conv(self, cid: str) -> dict | None:
         return self.db.one("SELECT * FROM conversations WHERE id=?", (cid,))
 
+    def set_conv_title(self, cid: str, title: str) -> None:
+        self.db.execute("UPDATE conversations SET title=? WHERE id=?", (title[:80], cid))
+
     def add_msg(self, cid: str, role: str, content: str, task_id: str = "", meta: dict | None = None) -> int:
         mid = self.db.insert("messages", {"conv_id": cid, "role": role, "content": content, "task_id": task_id,
                                           "created_at": now_ts(), "meta": dumps(meta) if meta else ""})
