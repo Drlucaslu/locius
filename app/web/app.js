@@ -28,7 +28,7 @@ function Tf(s, ...a) { return (LANG === 'en' ? (EN[s] ?? s) : s).replace(/\{(\d+
 const B = s => (LANG === 'en' ? biEn(String(s ?? '')) : s);   // server-provided bilingual text
 document.documentElement.lang = LANG === 'en' ? 'en' : 'zh-CN';
 // The language lives in Settings (server side) so the agent uses it too; localStorage only caches it for the first paint.
-// First visit (language never chosen): take the browser's language and save it, so an English Olares gets an English agent.
+// First visit (language never chosen): take the browser's language and save it, so an English browser gets an English agent.
 async function syncLang() {
   try {
     const r = await api('settings');
@@ -43,7 +43,7 @@ async function syncLang() {
 function i18nStatic() {
   if (LANG !== 'en') return;
   const set = (sel, text, attr) => { const el = document.querySelector(sel); if (el) { if (attr) el.setAttribute(attr, text); else el.textContent = text; } };
-  set('.brand small', 'Olares One · Local Agent');
+  set('.brand small', 'Private agent on its own computer');
   set('#menuBtn', 'Menu', 'aria-label');
   set('#viewTitle', 'Chat');
   set('#modelChip', 'Model', 'title'); set('#modelChip', 'Model …');
@@ -159,6 +159,7 @@ async function viewChat(root) {
   const list = h('div', { class: 'convlist' });
   const thread = h('div', { class: 'thread' });
   wrap.append(list, thread, convResizer(wrap)); root.append(wrap);
+  passwordReminder();
   await loadConvs();
   if (S.conv && !S.convs.some(c => c.id === S.conv)) { S.conv = null; S.convData = null; }
   renderConvList(list);
@@ -224,7 +225,7 @@ async function deleteConv(id) {
   await loadConvs(); renderConvList();
   toast(T('已删除 Deleted'));
 }
-// window.confirm is fine inside the Olares app window
+// window.confirm is fine inside the app window
 function confirmInline(msg) { try { return window.confirm(msg); } catch (e) { return true; } }
 
 function toggleHistory() {
@@ -318,12 +319,13 @@ function renderThread(thread) {
     d && d.messages.length ? h('span', { class: 'small faint th-meta' }, Tf("{0} 个任务 tasks", (Object.keys(d.tasks || {}).length))) : null,
     h('button', { class: 'btn small primary', onclick: newChat, title: T('开始新对话（新的上下文）') }, T('＋ 新对话')),
     S.conv ? h('button', { class: 'btn small', onclick: () => safe(deleteConv)(S.conv), title: T('删除当前对话') }, '🗑') : null);
+  if (S.passwordDefault) thread.insertBefore(pwBanner(), oldComp || null);
   thread.insertBefore(head, oldComp || null);
   const msgs = h('div', { class: 'msgs', 'aria-live': 'polite' });
   if (!d || !d.messages.length) {
     msgs.append(h('div', { class: 'msg' }, h('div', { class: 'card' },
       h('h3', null, T('你好，我是 OMuse 👋')),
-      h('p', { class: 'sub' }, T('运行在你的 Olares One 上的私人 Agent。我可以读写邮件、操作浏览器、管理文件、记住你的偏好、定时执行任务。')
+      h('p', { class: 'sub' }, T('我是只为你服务的私人 Agent，运行在一台专属于你的计算机上：上下文、工具和凭据都只属于你。我可以读写邮件、操作浏览器、管理文件、记住你的偏好、定时执行任务。')
         + T('发送邮件、提交表单、付款、删除等高风险动作，都会由独立的 Sentinel（哨兵）弹出审批，你批准后才会执行。')),
       S.gmailReady === false ? h('p', { class: 'small muted' }, T('提示：先到「连接 Connections」连接你的邮箱（Gmail、Outlook、QQ、163 等）。')) : null)));
   } else {
@@ -546,6 +548,7 @@ function taskCard(t) {
     h('div', { class: 'head' }, pill(t.status),
       h('span', { class: 'goal', title: t.goal }, t.plan && t.plan.objective ? t.plan.objective : t.goal),
       active && t.status !== 'WAITING_APPROVAL' ? h('span', { class: 'typing dots' }, t.status === 'PLANNING' ? T('规划中') : T('执行中')) : null,
+      active ? h('span', { class: 'small retry', style: 'color:var(--warn)', hidden: true }) : null,
       h('a', { class: 'small', href: '#tasks/' + t.id }, T('详情 Details'))),
     planList(t.plan),
     t.status === 'WAITING_APPROVAL' && t.waiting ? h('div', { class: 'row', style: 'margin-top:8px' },
@@ -595,6 +598,7 @@ function evLine(e) {
     case 'context_site': body = h('span', null, Tf("🧠 记得在 {0} 的习惯：{1}", d.site, (d.facts || []).join(T('；')))); break;
     case 'profile_read': body = h('span', { class: 'muted' }, Tf("🪪 读取档案：{0}", (d.fields || []).join(', ') || T('全部'))); break;
     case 'replanning': body = h('span', { style: 'color:var(--warn)' }, T('🔄 重新规划 Re-plan')); break;
+    case 'llm_retry': body = h('span', { style: 'color:var(--warn)' }, Tf("🔁 模型重试 {0}/{1}：{2}，{3} 秒后再试", d.attempt, d.of, d.reason || '', d.wait_s)); break;
     case 'chart': body = h('span', null, Tf("📊 图表：{0}", (d.title || d.path || ''))); break;
     case 'image': body = h('span', null, Tf("🎨 生成图片：{0}", ((d.paths || []).join(', ') || d.path || '') + (d.model ? '  (' + d.model + ', ' + (d.size || '') + ', ' + (d.latency_s || '') + 's)' : ''))); break;
     case 'gave_up': body = h('span', { style: 'color:var(--warn)' }, T('🛑 同样的来源反复失败，停止重试，按已有信息作答')); break;
@@ -1434,7 +1438,7 @@ function phoneCard(c) {
   const owner = inp(cf.owner_name, 'Lucas Lu');
   const from = inp(cf.from_number, '+19793471777');
   const connId = inp(cf.connection_id, '2xxxxxxxxxxxxxxxxxx');
-  const pub = inp(cf.public_url, 'https://xxxxxxxx.yourname.olares.com');
+  const pub = inp(cf.public_url, 'https://omuse.example.com');
   const tkey = inp('', c.has_credential ? T('已保存 saved — 不改可留空') : 'KEY0…', 'password');
   const okey = inp('', c.has_credential ? T('已保存 saved — 不改可留空') : 'sk-…', 'password');
   const pkey = inp('', T('可选 optional — Telnyx 公钥 (webhook 签名)'), 'password');
@@ -1491,7 +1495,7 @@ function phoneCard(c) {
           h('li', null, T('Numbers → 你的号码 → 分配给这个 Voice API 应用')),
           h('li', null, T('Voice → Outbound Voice Profiles → 新建并关联这个应用，允许要拨打的国家（如新加坡、美国），建议设每日消费上限')),
           h('li', null, T('Account → API Keys 新建一个 Key；OpenAI 平台新建一个 API Key')),
-          h('li', null, T('公开地址：Olares 设置 → 应用 → OMuse → 入口「OMuse Phone」的网址（公开访问，只提供通话音频接口）'))),
+          h('li', null, T('公开地址：这台 OMuse 的 https 网址（电话端口只提供通话音频接口）'))),
         field(T('你的名字（AI 会说“替 … 打电话”）'), owner),
         h('div', { class: 'grid2' }, field(T('外呼号码 From number'), from), field(T('Voice API 应用 ID (Connection ID)'), connId)),
         field(T('公开地址 Public URL'), pub),
@@ -1756,7 +1760,7 @@ async function mcpCard() {
     h('summary', null, h('b', null, list.length ? T('＋ 添加 MCP 服务器 Add server') : T('添加第一个 MCP 服务器 Add your first server'))),
     h('div', { class: 'stack', style: 'margin-top:10px' },
       h('ol', { class: 'steps-help' },
-        h('li', null, T('准备一个支持 HTTP 的 MCP 服务器地址（Streamable HTTP 或旧版 SSE 都可以）。公网地址必须是 https://；局域网 / Olares 上的服务可以用 http://。')),
+        h('li', null, T('准备一个支持 HTTP 的 MCP 服务器地址（Streamable HTTP 或旧版 SSE 都可以）。公网地址必须是 https://；内网服务可以用 http://。')),
         h('li', null, T('如果服务需要令牌（API Key / Personal Access Token），在「认证」里选择方式并粘贴。令牌加密存进 Sentinel 保险箱 (Vault)，模型看不到。')),
         h('li', null, T('连接后会列出它提供的工具：只读工具默认「自动」，会改数据的工具默认「每次审批」，你可以逐个调整。')),
         h('li', null, T('例：GitHub 官方 MCP https://api.githubcopilot.com/mcp/ ，认证选 Bearer，填 GitHub 个人访问令牌 (Personal Access Token)。'))),
@@ -2112,8 +2116,8 @@ async function viewSettings(root) {
   const testOut = h('span', { class: 'small muted' });
   const imgOut = h('span', { class: 'small muted' });
   root.append(h('div', { class: 'grid2' },
-    h('div', { class: 'card stack' }, h('h3', null, T('🧠 模型 Model（通过 Olares Router）')),
-      h('p', { class: 'sub' }, T('默认全部使用本机 Qwen3.8-27B，数据不出 Olares One。任何 OpenAI 兼容接口都可替换。')),
+    h('div', { class: 'card stack' }, h('h3', null, T('🧠 模型 Model')),
+      h('p', { class: 'sub' }, T('任何 OpenAI 兼容接口都可以用。每类请求可以交给不同的提供商，没有哪家模型提供商能看到你的全部信息；推理、网页浏览和工具调用都在云端完成。')),
       field('model_base_url', T('接口地址'), 'Base URL'), field('model_name', T('执行模型'), 'Model'),
       field('planner_model', T('规划模型（留空=同上）'), 'Planner model'),
       field('vision_model', T('视觉模型（看网页截图，留空=同执行模型）'), 'Vision model'),
@@ -2146,9 +2150,39 @@ async function viewSettings(root) {
     await api('settings', { method: 'PUT', body }); toast(T('已保存 Saved')); refreshModelChip();
     if (body.language && body.language !== LANG) { try { localStorage.setItem('omuse_lang', body.language); } catch (e) { /* ignore */ } location.reload(); }
   }) }, T('保存设置 Save settings'))));
+  // standalone installs (OMUSE_PASSWORD): change the login password
+  const pw = await sapi('password').catch(() => null);
+  if (pw && pw.enabled) root.append(passwordCard(pw));
   // hosted installs only (the three OMUSE_STRIPE_* variables): the last section of Settings
   const sub = await sapi('subscription').catch(() => null);
   if (sub && sub.enabled) root.append(subscriptionCard(sub));
+}
+
+// Standalone installs start on the password the host chose (OMUSE_PASSWORD): the chat reminds the user until they set
+// their own (renderThread puts the banner above the thread while S.passwordDefault is true).
+function passwordReminder() {
+  if (S.passwordDefault !== undefined) return;
+  sapi('password').then(r => { S.passwordDefault = !!(r.enabled && r.default); if (S.passwordDefault && S.view === 'chat') renderThread(); }).catch(() => {});
+}
+const pwBanner = () => h('div', { class: 'banner user', id: 'pwReminder', style: 'margin:10px 24px 0' },
+  h('span', { style: 'flex:1' }, T('🔑 你还在用初始密码。请到「设置」里改成自己的密码。')),
+  h('a', { href: '#settings', class: 'btn small' }, T('去修改 Change')));
+
+function passwordCard(info) {
+  const cur = h('input', { type: 'password', autocomplete: 'current-password' });
+  const nw = h('input', { type: 'password', autocomplete: 'new-password', minlength: info.min_length || 8 });
+  const again = h('input', { type: 'password', autocomplete: 'new-password' });
+  const field = (label, i) => h('label', { class: 'field' }, h('span', null, label), i);
+  return h('div', { class: 'card stack', id: 'password', style: 'margin-top:16px' }, h('h3', null, T('🔑 登录密码 Password')),
+    h('p', { class: 'sub' }, Tf("登录名 {0}。改完后浏览器会要求你用新密码重新登录。", info.user || 'omuse')),
+    info.default ? h('p', { class: 'small', id: 'pwDefault', style: 'color:var(--warn)' }, T('你还在用初始密码，请尽快修改。')) : null,
+    field(T('当前密码'), cur), field(Tf("新密码（至少 {0} 个字符）", info.min_length || 8), nw), field(T('再输一次新密码'), again),
+    h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: safe(async () => {
+      if (nw.value !== again.value) throw new Error(T('两次输入的新密码不一样'));
+      await sapi('password', { method: 'POST', body: { current: cur.value, new: nw.value } });
+      S.passwordDefault = false; cur.value = nw.value = again.value = '';
+      toast(T('密码已修改，请用新密码重新登录')); setTimeout(() => location.reload(), 1500);
+    }) }, T('修改密码 Change password'))));
 }
 
 function subscriptionCard(sub) {
@@ -2197,6 +2231,9 @@ function onEvent(ev) {
   } else if (ev.kind === 'task_event') {
     const tl = document.getElementById('tl-' + ev.task_id);
     if (tl && tl.closest('details').open && ev.type !== 'thinking') { if (tl.querySelector('.muted.small')) tl.innerHTML = ''; tl.append(evLine(ev)); }
+    // the model call is being retried: say so on the card ("Retrying 1 of 3"); the next event clears it
+    const rt = document.querySelector('#tc-' + ev.task_id + ' .retry');
+    if (rt) { if (ev.type === 'llm_retry') { rt.textContent = Tf("🔁 重试中 {0}/{1}（{2}，{3} 秒后）Retrying", ev.data.attempt, ev.data.of, ev.data.reason || '', ev.data.wait_s); rt.hidden = false; } else rt.hidden = true; }
     if (ev.type === 'plan' && S.tasks[ev.task_id]) { S.tasks[ev.task_id].plan = ev.data; const card = document.getElementById('tc-' + ev.task_id);
       if (card && S.view === 'chat') card.parentElement.replaceWith(taskCard(S.tasks[ev.task_id])); }
   } else if (ev.kind === 'conv_update') {
@@ -2228,7 +2265,7 @@ function takeoverToast(ev) {
   }, 800);
 }
 
-// The stream can drop without the page noticing (laptop sleep, network change, Olares session refresh): the browser
+// The stream can drop without the page noticing (laptop sleep, network change, session refresh): the browser
 // may reconnect and silently lose the events of the gap, or give up for good. So: the server sends a ping every 15 s,
 // a watchdog reconnects when nothing arrived for 45 s, and every (re)connect re-reads the state that may have been missed.
 let ES = null, lastEv = 0;
@@ -2296,7 +2333,7 @@ window.addEventListener('hashchange', () => { route(); });
 i18nStatic();
 (async () => {
   await syncLang();
-  try { const hs = await sapi('health'); $('#navfoot').textContent = Tf("v{0} · 数据保存在本机 local-first", (hs.version)); } catch (e) {}
+  try { const hs = await sapi('health'); $('#navfoot').textContent = Tf("v{0} · 专属计算机 · 私有上下文", (hs.version)); } catch (e) {}
   // seed "seen" so old pending approvals don't all pop at once; open the newest one
   try { const r = await sapi('approvals?status=pending'); S.approvals = r.approvals; } catch (e) {}
   route();

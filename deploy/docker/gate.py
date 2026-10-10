@@ -1,8 +1,9 @@
 """Password gate for standalone (Docker) installs.
 
 On Olares the entrance does the login, so Sentinel itself has none. Published straight from Docker it would be open to
-anyone who finds the port, so this wraps Sentinel in HTTP Basic auth (OMUSE_USER / OMUSE_PASSWORD). It lives outside
-app/ on purpose: the Olares chart bundle stays unchanged.
+anyone who finds the port, so this wraps Sentinel in HTTP Basic auth. The password is OMUSE_PASSWORD until the user
+sets their own in Settings (app/sentinel/passwd.py). It lives outside app/ on purpose: the Olares chart bundle stays
+unchanged.
 
 Not gated: /sentinel/api/health (container health check) and /internal/* (the runtime's calls; those carry their own
 RUNTIME_TOKEN and Sentinel checks it). The phone port (VOICE_PORT) is a separate app that is public by design.
@@ -11,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import hmac
 import os
+from typing import Callable
 
 OPEN_PATHS = ("/sentinel/api/health",)
 OPEN_PREFIXES = ("/internal/",)
@@ -20,12 +23,16 @@ FAIL_DELAY_S = 1.0   # slows password guessing
 
 
 class BasicAuthGate:
-    def __init__(self, app, user: str, password: str, fail_delay: float = FAIL_DELAY_S):
-        if not password:
-            raise ValueError("password required")
+    """verify(user, password) -> bool does the real check (slow: a password hash); version() changes when the password
+    does. The last accepted credentials are remembered by digest, so the hash runs once per sign-in, not per request."""
+
+    def __init__(self, app, verify: Callable[[str, str], bool], version: Callable[[], int] = lambda: 0,
+                 fail_delay: float = FAIL_DELAY_S):
         self.app = app
-        self.expected = f"{user}:{password}".encode()
+        self.verify = verify
+        self.version = version
         self.fail_delay = fail_delay
+        self._ok: tuple[int, bytes] | None = None   # (password version, sha256 of the accepted "user:password")
 
     def _authorized(self, scope) -> bool:
         for k, v in scope.get("headers") or []:
@@ -37,7 +44,18 @@ class BasicAuthGate:
                     given = base64.b64decode(cred.strip(), validate=True)
                 except ValueError:
                     return False
-                return hmac.compare_digest(given, self.expected)
+                digest = hashlib.sha256(given).digest()
+                ver = self.version()
+                if self._ok and self._ok[0] == ver and hmac.compare_digest(self._ok[1], digest):
+                    return True
+                try:
+                    user, _, password = given.decode().partition(":")
+                except UnicodeDecodeError:
+                    return False
+                if self.verify(user, password):
+                    self._ok = (ver, digest)
+                    return True
+                return False
         return False
 
     async def __call__(self, scope, receive, send):
@@ -59,8 +77,13 @@ class BasicAuthGate:
 
 def create():
     """uvicorn --factory entry point."""
+    from app.sentinel import passwd
     from app.sentinel.main import app
     if os.environ.get("OMUSE_AUTH", "").lower() == "off":
         print("[gate] OMUSE_AUTH=off: no login. Do not publish this port.", flush=True)
         return app
-    return BasicAuthGate(app, os.environ.get("OMUSE_USER") or "omuse", os.environ.get("OMUSE_PASSWORD", ""))
+    if not os.environ.get("OMUSE_PASSWORD"):
+        raise ValueError("OMUSE_PASSWORD required")
+    if not passwd.is_default():
+        print("[gate] using the password set in Settings (OMUSE_PASSWORD is only the initial one)", flush=True)
+    return BasicAuthGate(app, passwd.verify, passwd.version)

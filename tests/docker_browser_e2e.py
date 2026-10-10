@@ -4,8 +4,8 @@ screenshot (browser_look) and say what is on them. Needs a running container wit
   OMUSE_URL=http://127.0.0.1:8080 OMUSE_PASSWORD=... python3 tests/docker_browser_e2e.py [screenshot-dir]
 
 Cases: a static page (example.com), a live shop front (amazon.com: find the featured products) and a map
-(Google Maps: where does the map open, i.e. where does the container appear to be). E2E_CASES=static, =shop or =maps
-runs one of them. The model endpoint and its key are the container's own (OMUSE_MODEL_URL / OMUSE_MODEL /
+(Google Maps: where does the map open, i.e. where does the container appear to be), plus a password change through the
+gate. E2E_CASES=password, =static, =shop or =maps runs some of them. The model endpoint and its key are the container's own (OMUSE_MODEL_URL / OMUSE_MODEL /
 OMUSE_MODEL_API_KEY)."""
 import os
 import re
@@ -16,7 +16,7 @@ import httpx
 
 B = os.environ.get("OMUSE_URL", "http://127.0.0.1:8080").rstrip("/")
 AUTH = (os.environ.get("OMUSE_USER", "omuse"), os.environ["OMUSE_PASSWORD"])
-CASES = [c for c in os.environ.get("E2E_CASES", "static,shop,maps").split(",") if c]
+CASES = [c for c in os.environ.get("E2E_CASES", "password,static,shop,maps").split(",") if c]
 SHOT_DIR = sys.argv[1] if len(sys.argv) > 1 else ""
 H = {"X-Persona-UI": "1"}
 c = httpx.Client(timeout=120, trust_env=False, auth=AUTH)
@@ -32,8 +32,8 @@ def check(name, cond, info=""):
 def browse(case: str, host: str, ask: str, budget_s: int) -> tuple[str, str, str]:
     """Run one agent task on https://<host>/; returns (final answer, the vision model's answers, the page's URL)."""
     t0 = time.time()
-    r = c.post(B + "/api/chat", headers=H, json={"message": (
-        f"Open https://{host}/ with browser_navigate. Then call browser_look to take a screenshot of the page. {ask}")}).json()
+    msg = f"Open https://{host}/ with browser_navigate. Then call browser_look to take a screenshot of the page. {ask}"
+    r = c.post(B + "/api/chat", headers=H, json={"message": msg}).json()
     t = {}
     while time.time() - t0 < budget_s:
         t = c.get(f"{B}/api/tasks/{r['task_id']}").json()
@@ -55,7 +55,16 @@ def browse(case: str, host: str, ask: str, budget_s: int) -> tuple[str, str, str
     # this task's own page: the top-level "url" is whichever task the live view shows, which may be another one
     url = next((x.get("url", "") for x in st.get("tasks", []) if x.get("task_id") == r["task_id"]), st.get("url", ""))
     check(f"{case}: browser is on the page, headed", host.removeprefix("www.") in url and st.get("headless") is False, st)
-    print(f"\n--- {case}: agent's answer ({time.time() - t0:.0f}s, tools: {calls}) ---\n{out}\n")
+    # the chat list shows a short title summarising the chat, not the truncated question
+    title = ""
+    for _ in range(30):
+        conv = next((x for x in c.get(B + "/api/conversations").json()["conversations"] if x["id"] == r["conversation_id"]), {})
+        title = conv.get("title") or ""
+        if title and not msg.startswith(title):
+            break
+        time.sleep(1)
+    check(f"{case}: the chat got a summarising title that fits the list", title and not msg.startswith(title) and len(title) <= 40, title)
+    print(f"\n--- {case}: agent's answer ({time.time() - t0:.0f}s, tools: {calls}; chat title: {title!r}) ---\n{out}\n")
     return out, vision, url
 
 
@@ -90,6 +99,17 @@ if "maps" in CASES:
     check("maps: final answer says where the map is", len(out) > 80 and not re.search(r"consent|before you continue|unusual traffic", out, re.I), out)
     if at:
         print(f"maps: centred on {at.group(1)}, {at.group(2)}\n")
+
+if "password" in CASES:
+    # change the login password through the UI's API; the gate must switch over at once and OMUSE_PASSWORD must stop working
+    r = c.post(B + "/sentinel/api/password", headers=H, json={"current": AUTH[1], "new": "e2e-temp-password-9"})
+    check("password: change accepted", r.status_code == 200, (r.status_code, r.text[:200]))
+    check("password: the initial password no longer opens the UI", httpx.get(B + "/", auth=AUTH, trust_env=False).status_code == 401)
+    c2 = httpx.Client(timeout=60, trust_env=False, auth=(AUTH[0], "e2e-temp-password-9"))
+    check("password: the new one does", c2.get(B + "/").status_code == 200)
+    check("password: Settings no longer says 'default'", c2.get(B + "/sentinel/api/password").json().get("default") is False)
+    r = c2.post(B + "/sentinel/api/password", headers=H, json={"current": "e2e-temp-password-9", "new": AUTH[1]})
+    check("password: changed back for the next run", r.status_code == 200 and c.get(B + "/").status_code == 200, (r.status_code, r.text[:200]))
 
 print("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

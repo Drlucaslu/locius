@@ -1465,7 +1465,8 @@ def test_docker_gate_basic_auth():
     async def inner(scope, receive, send):
         await send({"type": "http.response.start", "status": 200, "headers": []})
 
-    gate = BasicAuthGate(inner, "omuse", "pä55", fail_delay=0)
+    calls = []
+    gate = BasicAuthGate(inner, lambda u, p: calls.append(u) or (u == "omuse" and p == "pä55"), fail_delay=0)
 
     def status(path, cred=None, scheme="Basic"):
         sent = []
@@ -1483,8 +1484,32 @@ def test_docker_gate_basic_auth():
     assert status("/sentinel/api/health")[0] == 200                   # container health check
     assert status("/internal/act")[0] == 200                          # runtime calls: Sentinel checks RUNTIME_TOKEN itself
     assert status("/internalx")[0] == 401
-    with pytest.raises(ValueError):
-        BasicAuthGate(inner, "omuse", "")
+    n = len(calls)
+    assert status("/api/stream", "omuse:pä55")[0] == 200 and len(calls) == n   # accepted once: no second slow check
+    assert status("/api/stream", "omuse:wrong")[0] == 401 and len(calls) == n + 1
+    gate.version = lambda: 2                                                    # password changed: cache dropped
+    assert status("/api/stream", "omuse:pä55")[0] == 200 and len(calls) == n + 2
+
+
+def test_login_password_default_then_own(monkeypatch, tmp_path):
+    from app.sentinel import passwd
+    monkeypatch.setenv("SENTINEL_DATA", str(tmp_path))
+    monkeypatch.delenv("OMUSE_PASSWORD", raising=False)
+    monkeypatch.delenv("OMUSE_AUTH", raising=False)
+    assert not passwd.enabled() and not passwd.verify("omuse", "x")             # Olares: no login of its own
+    monkeypatch.setenv("OMUSE_PASSWORD", "initial-pw")
+    assert passwd.enabled() and passwd.is_default()
+    assert passwd.verify("omuse", "initial-pw") and not passwd.verify("omuse", "nope") and not passwd.verify("admin", "initial-pw")
+    with pytest.raises(passwd.PasswordError):
+        passwd.set_password("short")
+    v0 = passwd.version()
+    passwd.set_password("my own password")
+    assert not passwd.is_default() and passwd.version() != v0
+    assert oct(os.stat(passwd.path()).st_mode & 0o777) == "0o600"
+    assert "my own password" not in open(passwd.path()).read()                 # hashed, not stored
+    assert passwd.verify("omuse", "my own password") and not passwd.verify("omuse", "initial-pw")
+    monkeypatch.setenv("OMUSE_AUTH", "off")
+    assert not passwd.enabled()
 
 
 def test_cut_off_final_detects_fragments():
@@ -2856,3 +2881,104 @@ def test_model_defaults_from_env():
     env = {**os.environ, "OMUSE_PLANNER_MODEL": "plan-1", "OMUSE_VISION_MODEL": " vis-1 ", "OMUSE_STT_MODEL": ""}
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True).stdout.split("\n")
     assert out[0] == "plan-1 vis-1 -" and out[1] == "saved-v", out
+
+
+def test_chat_titles_are_cleaned_and_cut():
+    from app.runtime.prompts import clean_title, title_prompt, TITLE_MAX
+    assert clean_title('Title: "Flight to Tokyo booked."', "en") == "Flight to Tokyo booked"
+    assert clean_title("「东京机票已订」。\n(second line ignored)", "zh") == "东京机票已订"
+    assert clean_title("", "en") == "" and clean_title("   \n", "zh") == ""
+    long = "a very long title that goes on and on well past what the chat list can show in two lines"
+    assert clean_title(long, "en") == long[:TITLE_MAX["en"]].rstrip() and len(clean_title("汉" * 50, "zh")) == TITLE_MAX["zh"]
+    assert "40 characters" in title_prompt("en") and "English" in title_prompt("en")
+    assert "20 characters" in title_prompt("zh") and "简体中文" in title_prompt("zh")
+
+
+def _llm_with_responses(monkeypatch, responses, retries_log):
+    """An LLM whose HTTP layer serves the scripted responses (or raises the scripted exceptions) in order; sleeps are
+    recorded, not slept; retries are logged through on_retry."""
+    from app.runtime import llm as L
+
+    class Resp:
+        def __init__(self, status, body=None, headers=None):
+            self.status_code = status
+            self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+            self._body = body or {}
+            self.text = json.dumps(self._body)
+
+        def json(self):
+            return self._body
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **k):
+            r = responses.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+    sleeps = []
+
+    async def fake_sleep(d):
+        sleeps.append(d)
+
+    async def on_retry(info):
+        retries_log.append(info)
+    monkeypatch.setattr(L.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(L.asyncio, "sleep", fake_sleep)
+    ok = {"choices": [{"message": {"role": "assistant", "content": "fine"}}], "usage": {}}
+    llm = L.LLM(lambda: {"model_base_url": "http://x/v1", "model_name": "m", "temperature": 0, "max_tokens": 10}, on_retry=on_retry)
+    return llm, sleeps, Resp, ok
+
+
+def test_llm_retries_obey_retry_after(monkeypatch):
+    import asyncio
+    log, responses = [], []
+    llm, sleeps, Resp, ok = _llm_with_responses(monkeypatch, responses, log)
+    # 429 with Retry-After: wait exactly that long; a 403 with Retry-After is obeyed the same way
+    responses += [Resp(429, {"error": "slow down"}, {"Retry-After": "7"}), Resp(403, {"error": "blocked"}, {"Retry-After": "2"}), Resp(200, ok)]
+    r = asyncio.run(llm.chat([{"role": "user", "content": "hi"}], task_id="t1"))
+    assert r["content"] == "fine" and sleeps == [7.0, 2.0]
+    assert [(x["attempt"], x["of"], x["source"], x["wait_s"]) for x in log] == [(1, 10, "retry-after", 7.0), (2, 10, "retry-after", 2.0)]
+    assert log[0]["task_id"] == "t1" and "HTTP 429" in log[0]["reason"]
+
+
+def test_llm_retries_general_errors_5_10_20(monkeypatch):
+    import asyncio, httpx
+    from app.runtime.llm import LLMError
+    log, responses = [], []
+    llm, sleeps, Resp, ok = _llm_with_responses(monkeypatch, responses, log)
+    # a 503, a connection error and a 403 without Retry-After: three retries after 5, 10 and 20 s, then success
+    responses += [Resp(503, {"error": "busy"}), httpx.ConnectError("down"), Resp(403, {"error": "nope"}), Resp(200, ok)]
+    r = asyncio.run(llm.chat([{"role": "user", "content": "hi"}]))
+    assert r["content"] == "fine" and sleeps == [5.0, 10.0, 20.0]
+    assert [(x["attempt"], x["of"], x["source"]) for x in log] == [(1, 3, "backoff"), (2, 3, "backoff"), (3, 3, "backoff")]
+    # a fourth failure in a row is the end
+    responses += [Resp(500, {"error": "a"}), Resp(500, {"error": "b"}), Resp(500, {"error": "c"}), Resp(500, {"error": "d"})]
+    sleeps.clear()
+    with pytest.raises(LLMError, match="after retries"):
+        asyncio.run(llm.chat([{"role": "user", "content": "hi"}]))
+    assert sleeps == [5.0, 10.0, 20.0]
+
+
+def test_llm_context_overflow_is_not_retried(monkeypatch):
+    import asyncio
+    from app.runtime.llm import LLMContextError
+    log, responses = [], []
+    llm, sleeps, Resp, ok = _llm_with_responses(monkeypatch, responses, log)
+    responses += [Resp(400, {"error": {"message": "the prompt exceeds the maximum context length"}})]
+    with pytest.raises(LLMContextError):
+        asyncio.run(llm.chat([{"role": "user", "content": "hi"}]))
+    assert sleeps == [] and log == []
+
+
+def test_retry_after_header_parsing():
+    import email.utils, time
+    from app.runtime.llm import retry_after, RETRY_AFTER_MAX
+    assert retry_after({"retry-after": "12"}) == 12.0 and retry_after({}) is None and retry_after(None) is None
+    assert retry_after({"retry-after": "junk"}) is None
+    assert retry_after({"retry-after": "99999"}) == RETRY_AFTER_MAX                       # capped
+    assert 25 <= retry_after({"retry-after": email.utils.formatdate(time.time() + 30, usegmt=True)}) <= 31   # HTTP date
+    assert retry_after({"retry-after": email.utils.formatdate(time.time() - 60, usegmt=True)}) == 0.0        # in the past: now

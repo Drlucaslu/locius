@@ -789,7 +789,7 @@ class Runtime:
     def __init__(self, data_dir: str, publish):
         self.store = RStore(data_dir)
         self.publish = publish            # async fn(event: dict)
-        self.llm = LLM(self.store.settings, on_call=self._on_llm_call)
+        self.llm = LLM(self.store.settings, on_call=self._on_llm_call, on_retry=self._on_llm_retry)
         self._last_image: dict[str, str] = {}   # task_id -> latest generated/edited image (edit_image / vary_image default)
         self._img_count: dict[str, int] = {}    # task_id -> pictures generated so far (cost guard, IMAGE_BUDGET_PER_TASK)
         self.running: dict[str, asyncio.Task] = {}
@@ -823,6 +823,36 @@ class Runtime:
             await self.sentinel("POST", "/internal/audit", {"actor": actor, "action": action, "task_id": task_id, **kw}, timeout=10)
         except Exception:
             pass
+
+    async def _retitle(self, cid: str, task_id: str = ""):
+        """Give the chat a title that summarises it (the list showed the truncated first question). Re-done after
+        every finished task, so the title follows the conversation; cheap: a tiny no-think call."""
+        try:
+            conv = self.store.conv(cid)
+            if not conv or conv.get("kind", "chat") != "chat":
+                return
+            msgs = [m for m in self.store.msgs(cid, 40) if m["role"] in ("user", "assistant") and (m.get("content") or "").strip()][-8:]
+            if not msgs:
+                return
+            s = self.store.settings()
+            language = s.get("language") or "zh"
+            if s.get("reply_language") == "match":
+                last_user = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
+                language = "en" if prompts.request_language(last_user, language) == "English" else "zh"
+            text = "\n\n".join(f"{'User' if m['role'] == 'user' else 'Assistant'}: {truncate(str(m['content']), 400)}" for m in msgs)
+            r = await self.llm.chat([{"role": "system", "content": prompts.title_prompt(language)}, {"role": "user", "content": text}],
+                                    purpose="title", task_id=task_id, max_tokens=60, temperature=0, no_think=True)
+            title = prompts.clean_title(r.get("content") or "", language)
+            if title and title != conv.get("title"):
+                self.store.set_conv_title(cid, title)
+                await self.publish({"kind": "conv_update", "conv_id": cid})
+        except Exception as e:   # a title is a nicety: never let it touch the task
+            print(f"[title] {cid}: {type(e).__name__}: {str(e)[:120]}", flush=True)
+
+    async def _on_llm_retry(self, info: dict):
+        """A model call failed and will be retried: tell the task's live view ("Retrying 1 of 3")."""
+        if info.get("task_id"):
+            await self.event(info["task_id"], "llm_retry", {k: info[k] for k in ("attempt", "of", "wait_s", "reason", "source", "purpose")})
 
     async def _on_llm_call(self, info: dict):
         await self.audit("llm", f"model.{info['purpose']}", info.get("task_id", ""), resource=info.get("model", ""),
@@ -1673,6 +1703,7 @@ class Runtime:
             await self.event(task_id, "final", {"text": truncate(final, 4000)})
             self.store.add_msg(t["conv_id"], "assistant", final, task_id)
             await self.publish({"kind": "conv_update", "conv_id": t["conv_id"]})
+            asyncio.create_task(self._retitle(t["conv_id"], task_id))
             if timed_out and not gave_up and steps < max_steps:
                 await self._warn_unattended(t, (f"超过 {max_minutes:.0f} 分钟上限，按已有信息作答",
                                                 f"hit the {max_minutes:.0f}-minute limit"), final)
