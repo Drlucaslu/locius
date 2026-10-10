@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request
 app = FastAPI()
 PAGE = os.environ.get("TEST_PAGE", "http://example.com/")
 CALLS = []
+RETRY = {}   # scenario -> failures served so far
 
 
 def tc(name, args):
@@ -50,8 +51,20 @@ async def chat(req: Request):
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": {"message": "image input is not supported by this model"}}, status_code=400)
     sys = msgs[0]["content"] if msgs and msgs[0]["role"] == "system" else ""
+    # retry policy (retry_e2e.py): the first calls of a task fail, then it works
+    goal_txt = next((str(m["content"]) for m in reversed(msgs) if m["role"] == "user"), "")
+    m = re.search(r"RETRY(429|503)x(\d)", goal_txt)
+    if m and not sys.startswith("You name conversations"):
+        from fastapi.responses import JSONResponse
+        key = m.group(0); n = RETRY.get(key, 0)
+        if n < int(m.group(2)):
+            RETRY[key] = n + 1
+            hdr = {"Retry-After": "1"} if m.group(1) == "429" else {}
+            return JSONResponse({"error": {"message": f"fake {m.group(1)} #{n + 1}"}}, status_code=int(m.group(1)), headers=hdr)
     if sys.startswith("You name conversations"):   # chat titles (agent._retitle)
         last = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
+        if "很长很长" in str(last):   # resize_ui.py needs its long first-question title kept: "nothing usable" from the model
+            return reply("")
         users = re.findall(r"User: (.*)", str(last))   # the latest request: deterministic, and the title follows the chat
         return reply("Topic: " + (users[-1].split()[0][:16] if users and users[-1].split() else "chat"))
     if sys.startswith("You look at a file"):   # file_look / attachment reading

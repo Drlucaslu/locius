@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import email.utils
 import json
 import os
 import re
@@ -54,6 +55,31 @@ def pick_chat_model(models: list[dict], exclude: str = "") -> str:
             continue
         out.append(mid)
     return out[0] if out else ""
+
+
+# Retries. A Retry-After header is always obeyed (429, 403, 503 ... whatever the status), up to RETRY_AFTER_TRIES
+# times and RETRY_AFTER_MAX seconds each. Any other failure (HTTP error, timeout, connection error) is retried
+# RETRY_DELAYS times, after 5, 10 and 20 seconds. Only an over-long prompt is not retried: it cannot succeed as is.
+RETRY_DELAYS = (5.0, 10.0, 20.0)
+RETRY_AFTER_TRIES = 10
+RETRY_AFTER_MAX = 300.0
+
+
+def retry_after(headers) -> float | None:
+    """Seconds to wait as the server asked (delta-seconds or an HTTP date), capped; None when there is no header."""
+    v = (headers or {}).get("retry-after") if headers is not None else None
+    if v is None:
+        return None
+    v = str(v).strip()
+    try:
+        secs = float(v)
+    except ValueError:
+        try:
+            dt = email.utils.parsedate_to_datetime(v)
+            secs = dt.timestamp() - time.time()
+        except (TypeError, ValueError, IndexError):
+            return None
+    return max(0.0, min(secs, RETRY_AFTER_MAX))
 
 
 class LLMError(Exception):
@@ -119,9 +145,10 @@ def extract_json(text: str):
 
 
 class LLM:
-    def __init__(self, get_settings, on_call=None):
+    def __init__(self, get_settings, on_call=None, on_retry=None):
         self.get_settings = get_settings
         self.on_call = on_call
+        self.on_retry = on_retry   # async (info) -> None: the UI shows "Retrying 1 of 3"
         # Requests in flight at once. llama.cpp serves 2 slots (-np 2) and batches them, so two tasks no longer wait for
         # each other's calls (with 1, a one-step translation waited ~50 s behind another task's long prefill).
         try:
@@ -134,6 +161,28 @@ class LLM:
         # the configured model is briefly "missing"; a permanent fallback kept every task on whatever model was listed
         # first — on 2026-10-05 that was a text-to-speech model, and every chat failed with HTTP 422 for a day.
         self.fallback: dict[str, tuple[str, float]] = {}
+
+    async def _retry(self, state: dict, err: str, headers, task_id: str, purpose: str) -> None:
+        """Decide whether to retry after `err`; sleeps the right time or raises LLMError when retries are used up."""
+        ra = retry_after(headers)
+        if ra is not None and state["after"] < RETRY_AFTER_TRIES:
+            state["after"] += 1
+            attempt, of, delay, source = state["after"], RETRY_AFTER_TRIES, ra, "retry-after"
+        elif state["backoff"] < len(RETRY_DELAYS):
+            delay = RETRY_DELAYS[state["backoff"]]
+            state["backoff"] += 1
+            attempt, of, source = state["backoff"], len(RETRY_DELAYS), "backoff"
+        else:
+            raise LLMError(f"模型服务暂时不可用 (model unavailable after retries): {err}")
+        info = {"attempt": attempt, "of": of, "wait_s": round(delay, 1), "reason": err[:200], "source": source,
+                "task_id": task_id, "purpose": purpose}
+        print(f"[llm] retry {attempt}/{of} in {delay:.0f}s ({source}): {err[:120]}", flush=True)
+        if self.on_retry:
+            try:
+                await self.on_retry(info)
+            except Exception:
+                pass
+        await asyncio.sleep(delay)
 
     @staticmethod
     def _model_missing(r) -> bool:
@@ -174,12 +223,19 @@ class LLM:
         if not model:
             raise LLMError("没有语音转文字模型 (no speech-to-text model on the model endpoint; set Settings → Speech-to-text model)")
         t0 = time.time()
+        retries = {"after": 0, "backoff": 0}
         async with self.stt_sem:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(float(s.get("llm_timeout") or 600), connect=15)) as c:
-                r = await c.post(f"{base}/audio/transcriptions", data={"model": model, "response_format": "json"},
-                                 files={"file": (filename, audio, "audio/wav")}, headers=auth_headers())
-        if r.status_code >= 400:
-            raise LLMError(f"语音转文字失败 transcription failed HTTP {r.status_code}: {r.text[:200]}")
+            while True:
+                try:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(float(s.get("llm_timeout") or 600), connect=15)) as c:
+                        r = await c.post(f"{base}/audio/transcriptions", data={"model": model, "response_format": "json"},
+                                         files={"file": (filename, audio, "audio/wav")}, headers=auth_headers())
+                except (httpx.TimeoutException, httpx.TransportError) as e:
+                    await self._retry(retries, f"{type(e).__name__}: {e}", None, task_id, "stt")
+                    continue
+                if r.status_code < 400:
+                    break
+                await self._retry(retries, f"语音转文字失败 transcription failed HTTP {r.status_code}: {r.text[:200]}", r.headers, task_id, "stt")
         try:
             text = r.json().get("text") or ""
         except Exception:
@@ -221,48 +277,46 @@ class LLM:
             except Exception:
                 pass
         timeout = float(s.get("llm_timeout") or 600)
-        last_err = None
         queued = time.time()
+        retries = {"after": 0, "backoff": 0}
+        stripped_kwargs = False
         async with self.sem:
             wait_s = round(time.time() - queued, 2)
-            for attempt in range(4):
+            while True:
                 t0 = time.time()
                 try:
                     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=15)) as c:
                         r = await c.post(f"{base}/chat/completions", json=body, headers=auth_headers())
-                    if r.status_code in (400, 413, 500) and _context_exceeded(r.text):
-                        raise LLMContextError(f"上下文太长 (prompt exceeds the model's context window): {r.text[:200]}",
-                                              chars=sum(len(str(m.get("content") or "")) for m in messages))
-                    if r.status_code in (429, 500, 502, 503, 504):
-                        last_err = f"HTTP {r.status_code}: {r.text[:200]}"
-                        await asyncio.sleep(3 * (attempt + 1))
-                        continue
-                    if r.status_code >= 400:
-                        # some servers reject chat_template_kwargs; retry once without it
-                        if body["model"] != want and not _context_exceeded(r.text):
-                            # the stand-in model fails: forget it and try the configured model again
-                            self.fallback.pop(want, None)
-                            body["model"] = want
-                            continue
-                        if self._model_missing(r) and want not in self.fallback:
-                            alt = await self.first_model(base, body["model"])
-                            if alt:
-                                self.fallback[want] = (alt, time.time() + 300)
-                                body["model"] = alt
-                                continue
-                            raise LLMError(f"设置里的模型 {want} 现在不可用（可能正在加载或已被卸载），也没有别的聊天模型可用 "
-                                           f"(the configured model is not available right now): HTTP {r.status_code}: {r.text[:200]}")
-                        if "chat_template_kwargs" in body and attempt == 0:
-                            body.pop("chat_template_kwargs", None)
-                            continue
-                        raise LLMError(f"模型接口错误 model API error HTTP {r.status_code}: {r.text[:300]}")
+                except (httpx.TimeoutException, httpx.TransportError) as e:
+                    await self._retry(retries, f"{type(e).__name__}: {e}", None, task_id, purpose)
+                    continue
+                if r.status_code in (400, 413, 500) and _context_exceeded(r.text):
+                    raise LLMContextError(f"上下文太长 (prompt exceeds the model's context window): {r.text[:200]}",
+                                          chars=sum(len(str(m.get("content") or "")) for m in messages))
+                if r.status_code < 400:
                     data = r.json()
                     break
-                except (httpx.TimeoutException, httpx.TransportError) as e:
-                    last_err = f"{type(e).__name__}: {e}"
-                    await asyncio.sleep(3 * (attempt + 1))
-            else:
-                raise LLMError(f"模型服务暂时不可用 (model unavailable after retries): {last_err}")
+                err = f"HTTP {r.status_code}: {r.text[:200]}"
+                if r.status_code not in (429, 500, 502, 503, 504):
+                    # adjustments that are not retries: a stand-in model that fails, a missing model, a server that
+                    # rejects chat_template_kwargs
+                    if body["model"] != want and not _context_exceeded(r.text):
+                        self.fallback.pop(want, None)
+                        body["model"] = want
+                        continue
+                    if self._model_missing(r) and want not in self.fallback:
+                        alt = await self.first_model(base, body["model"])
+                        if alt:
+                            self.fallback[want] = (alt, time.time() + 300)
+                            body["model"] = alt
+                            continue
+                        err = (f"设置里的模型 {want} 现在不可用（可能正在加载或已被卸载），也没有别的聊天模型可用 "
+                               f"(the configured model is not available right now): {err}")
+                    elif "chat_template_kwargs" in body and not stripped_kwargs:
+                        stripped_kwargs = True
+                        body.pop("chat_template_kwargs", None)
+                        continue
+                await self._retry(retries, err, r.headers, task_id, purpose)
         latency = time.time() - t0
         try:
             msg = data["choices"][0]["message"]

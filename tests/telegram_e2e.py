@@ -36,7 +36,7 @@ say("你好")
 check("plain message -> task -> result sent back", wait_for(lambda: any("这是一个普通回答" in t for t in texts())), texts()[-4:])
 check("progress message edited", len(log()["edits"]) >= 1)
 convs = c.get(B + "/api/conversations").json()["conversations"]
-check("telegram conversation visible in web UI", any(x["title"].startswith("你好") for x in convs))
+check("telegram conversation visible in web UI", any("你好" in x["title"] for x in convs))   # titled after the chat since 0.2.77
 
 say("/new")  # fresh conversation so the fake LLM sees BROWSE as the goal
 time.sleep(2)

@@ -898,5 +898,7 @@ window.OMUSE_EN = {
 "再输一次新密码": "New password again",
 "两次输入的新密码不一样": "The two new passwords differ",
 "密码已修改，请用新密码重新登录": "Password changed; sign in again with the new password",
-"修改密码 Change password": "Change password"
+"修改密码 Change password": "Change password",
+"🔁 模型重试 {0}/{1}：{2}，{3} 秒后再试": "🔁 Model retry {0} of {1}: {2}; trying again in {3} s",
+"🔁 重试中 {0}/{1}（{2}，{3} 秒后）Retrying": "🔁 Retrying {0} of {1} ({2}; in {3} s)"
 };
