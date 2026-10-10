@@ -67,7 +67,7 @@ docker run -d --name omuse --restart unless-stopped \
   omuse
 ```
 
-Open `http://localhost:8080` and sign in as `omuse` (change with `OMUSE_USER`) with your password. Olares normally does the login; here the container asks for HTTP Basic auth and refuses to start without `OMUSE_PASSWORD`. Before opening the port to the internet, put HTTPS in front (Cloudflare Tunnel, Tailscale Funnel, Caddy, …) — Basic auth over plain HTTP sends the password in the clear. `OMUSE_MODEL_API_KEY` is sent as a Bearer token to the model endpoint and is never stored in Settings. Add `-p 8083:8083` only if you use the Telnyx phone line.
+Open `http://localhost:8080` and sign in as `omuse` (change with `OMUSE_USER`) with your password. `OMUSE_PASSWORD` is only the initial password: change it in Settings → Password (the UI reminds you until you do); the new one is stored hashed in the volume and wins from then on. Olares normally does the login; here the container asks for HTTP Basic auth and refuses to start without `OMUSE_PASSWORD`. Before opening the port to the internet, put HTTPS in front (Cloudflare Tunnel, Tailscale Funnel, Caddy, …) — Basic auth over plain HTTP sends the password in the clear. `OMUSE_MODEL_API_KEY` is sent as a Bearer token to the model endpoint and is never stored in Settings. Add `-p 8083:8083` only if you use the Telnyx phone line.
 
 **Configuration.** Instead of `-e` flags you can keep the settings in a file on the host and pass it with `--env-file` (one `NAME=value` per line, no quotes; keep it out of git, it holds your password and API key):
 

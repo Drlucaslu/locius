@@ -30,6 +30,7 @@ from app.sentinel.telegram_bot import TelegramBot
 from app.sentinel import phone
 from app.sentinel import dialmcp, mcp_oauth
 from app.sentinel import billing
+from app.sentinel import passwd
 from app.sentinel import vault
 
 SDATA = os.environ.get("SENTINEL_DATA", "/sdata")
@@ -1882,6 +1883,33 @@ async def b_input(req: Request):
 @app.get("/sentinel/api/health")
 async def health():
     return {"ok": True, "version": VERSION}
+
+
+# ------------------------------------------------------------------ login password (standalone installs)
+@app.get("/sentinel/api/password", dependencies=[Depends(ui_auth)])
+async def password_status():
+    """Whether this install has its own login (Docker: OMUSE_PASSWORD) and whether it still runs on the default."""
+    if not passwd.enabled():
+        return {"enabled": False}
+    return {"enabled": True, "default": passwd.is_default(), "user": passwd.user(), "min_length": passwd.MIN_LEN}
+
+
+@app.post("/sentinel/api/password", dependencies=[Depends(ui_auth)])
+async def password_change(req: Request):
+    if not passwd.enabled():
+        raise HTTPException(404, "this install has no login of its own")
+    b = await req.json()
+    current, new = str(b.get("current") or ""), str(b.get("new") or "")
+    if not passwd.verify(passwd.user(), current):
+        store.audit("user", "password.change", resource="login", result="denied", detail={"reason": "current password wrong"})
+        await asyncio.sleep(1.0)
+        raise HTTPException(403, "当前密码不对 (current password is wrong)")
+    try:
+        passwd.set_password(new)
+    except passwd.PasswordError as e:
+        raise HTTPException(400, str(e))
+    store.audit("user", "password.change", resource="login", result="success")
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ subscription (hosted installs)

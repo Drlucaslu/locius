@@ -1465,7 +1465,8 @@ def test_docker_gate_basic_auth():
     async def inner(scope, receive, send):
         await send({"type": "http.response.start", "status": 200, "headers": []})
 
-    gate = BasicAuthGate(inner, "omuse", "pä55", fail_delay=0)
+    calls = []
+    gate = BasicAuthGate(inner, lambda u, p: calls.append(u) or (u == "omuse" and p == "pä55"), fail_delay=0)
 
     def status(path, cred=None, scheme="Basic"):
         sent = []
@@ -1483,8 +1484,32 @@ def test_docker_gate_basic_auth():
     assert status("/sentinel/api/health")[0] == 200                   # container health check
     assert status("/internal/act")[0] == 200                          # runtime calls: Sentinel checks RUNTIME_TOKEN itself
     assert status("/internalx")[0] == 401
-    with pytest.raises(ValueError):
-        BasicAuthGate(inner, "omuse", "")
+    n = len(calls)
+    assert status("/api/stream", "omuse:pä55")[0] == 200 and len(calls) == n   # accepted once: no second slow check
+    assert status("/api/stream", "omuse:wrong")[0] == 401 and len(calls) == n + 1
+    gate.version = lambda: 2                                                    # password changed: cache dropped
+    assert status("/api/stream", "omuse:pä55")[0] == 200 and len(calls) == n + 2
+
+
+def test_login_password_default_then_own(monkeypatch, tmp_path):
+    from app.sentinel import passwd
+    monkeypatch.setenv("SENTINEL_DATA", str(tmp_path))
+    monkeypatch.delenv("OMUSE_PASSWORD", raising=False)
+    monkeypatch.delenv("OMUSE_AUTH", raising=False)
+    assert not passwd.enabled() and not passwd.verify("omuse", "x")             # Olares: no login of its own
+    monkeypatch.setenv("OMUSE_PASSWORD", "initial-pw")
+    assert passwd.enabled() and passwd.is_default()
+    assert passwd.verify("omuse", "initial-pw") and not passwd.verify("omuse", "nope") and not passwd.verify("admin", "initial-pw")
+    with pytest.raises(passwd.PasswordError):
+        passwd.set_password("short")
+    v0 = passwd.version()
+    passwd.set_password("my own password")
+    assert not passwd.is_default() and passwd.version() != v0
+    assert oct(os.stat(passwd.path()).st_mode & 0o777) == "0o600"
+    assert "my own password" not in open(passwd.path()).read()                 # hashed, not stored
+    assert passwd.verify("omuse", "my own password") and not passwd.verify("omuse", "initial-pw")
+    monkeypatch.setenv("OMUSE_AUTH", "off")
+    assert not passwd.enabled()
 
 
 def test_cut_off_final_detects_fragments():
@@ -2856,3 +2881,14 @@ def test_model_defaults_from_env():
     env = {**os.environ, "OMUSE_PLANNER_MODEL": "plan-1", "OMUSE_VISION_MODEL": " vis-1 ", "OMUSE_STT_MODEL": ""}
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True).stdout.split("\n")
     assert out[0] == "plan-1 vis-1 -" and out[1] == "saved-v", out
+
+
+def test_chat_titles_are_cleaned_and_cut():
+    from app.runtime.prompts import clean_title, title_prompt, TITLE_MAX
+    assert clean_title('Title: "Flight to Tokyo booked."', "en") == "Flight to Tokyo booked"
+    assert clean_title("「东京机票已订」。\n(second line ignored)", "zh") == "东京机票已订"
+    assert clean_title("", "en") == "" and clean_title("   \n", "zh") == ""
+    long = "a very long title that goes on and on well past what the chat list can show in two lines"
+    assert clean_title(long, "en") == long[:TITLE_MAX["en"]].rstrip() and len(clean_title("汉" * 50, "zh")) == TITLE_MAX["zh"]
+    assert "40 characters" in title_prompt("en") and "English" in title_prompt("en")
+    assert "20 characters" in title_prompt("zh") and "简体中文" in title_prompt("zh")

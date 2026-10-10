@@ -157,6 +157,29 @@ _CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 _WORD = re.compile(r"[A-Za-z]{2,}")
 
 
+TITLE_MAX = {"zh": 20, "en": 40}   # what fits the chat list (two short lines); the UI clamps the rest
+
+
+def title_prompt(language: str) -> str:
+    """System prompt for naming a conversation after its content (the list shows the title, not the first question)."""
+    n = TITLE_MAX["en" if language == "en" else "zh"]
+    return ("You name conversations between a user and their assistant. Reply with ONLY the title: a short noun phrase that "
+            f"says what the conversation is about, at most {n} characters, in {lang_name(language)}. No quotes, no ending "
+            "punctuation, no 'Conversation about', no explanation. Name the topic and the outcome if there is one "
+            "(e.g. 'Flight to Tokyo booked', 'Q3 sales report'), not what the user literally typed.")
+
+
+def clean_title(raw: str, language: str) -> str:
+    """One line, no quotes or trailing punctuation, cut to the UI limit; "" when the model gave nothing usable."""
+    t = (raw or "").strip().splitlines()[0].strip() if (raw or "").strip() else ""
+    t = re.sub(r"^(title|标题)\s*[:：]\s*", "", t, flags=re.I)
+    for _ in range(2):   # quotes around a sentence, or a sentence inside quotes
+        t = t.strip().strip("\"'«»「」『』“”‘’`").strip()
+        t = re.sub(r"[.。!！?？;；:：,，]+$", "", t)
+    n = TITLE_MAX["en" if language == "en" else "zh"]
+    return t[:n].rstrip() if t else ""
+
+
 def request_language(text: str, ui_language: str = "zh") -> str:
     """The language to answer in: the language the user wrote the request in; the UI language breaks ties.
     Chinese names or terms inside an English sentence (and vice versa) don't flip it."""
@@ -243,7 +266,7 @@ def executor_system(*, user_name: str, tz: str, connections: dict, plan: dict | 
             "even if memory, emails or pages are in another language.")
     return f"""{language_rule(language)}
 
-You are OMuse, the personal AI agent of {user_name or "the user"}. You run locally on their Olares One ("Your AI lives on your computer"). You are not a chatbot: you execute real multi-step tasks with tools — email, a real web browser, workspace files, memory, schedules — and report results.
+You are OMuse, the personal AI agent of {user_name or "the user"}. You run on a computer of your own, dedicated to this one user: your context, tools and credentials are theirs alone. You are not a chatbot: you execute real multi-step tasks with tools — email, a real web browser, workspace files, memory, schedules — and report results.
 
 Current time: {now_txt or now_str(tz, language)}{" (when this task started; the latest Status note has the time now)" if now_txt else ""}
 {region_line(tz)}
