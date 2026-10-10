@@ -73,6 +73,7 @@ check("no give-up when the switch made progress", not any(e["type"] == "gave_up"
 
 # ---------------------------------------------------------------- 3. prompt-cache friendliness (0.2.23)
 calls = httpx.get("http://127.0.0.1:8090/calls_for", params={"marker": "SWITCHSRC"}, timeout=10).json()
+calls = [x for x in calls if not str(x.get("system", "")).startswith("You name conversations")]   # the chat-title call is not a step
 systems = {x["system"] for x in calls}
 check("system prompt identical on every step (model server can reuse its cache)", len(calls) >= 4 and len(systems) == 1,
       (len(calls), len(systems)))
