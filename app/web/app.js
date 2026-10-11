@@ -55,7 +55,6 @@ async function syncLang() {
 function i18nStatic() {
   const set = (sel, text, attr) => { const el = document.querySelector(sel); if (el) { if (attr) el.setAttribute(attr, text); else el.textContent = text; } };
   if (LANG === 'tw') {   // the static strings of index.html, Traditional (i18n-ok: not T() keys)
-    set('.brand small', '專屬電腦上的私人 Agent');   // i18n-ok
     set('#menuBtn', '選單 Menu', 'aria-label');   // i18n-ok
     set('#viewTitle', '對話');   // i18n-ok
     set('#approvalBell', '審批 Approvals', 'aria-label'); set('#approvalBell span', '審批');   // i18n-ok
@@ -64,7 +63,6 @@ function i18nStatic() {
     return;
   }
   if (LANG !== 'en') return;
-  set('.brand small', 'Private agent on its own computer');
   set('#menuBtn', 'Menu', 'aria-label');
   set('#viewTitle', 'Chat');
   set('#modelChip', 'Model', 'title'); set('#modelChip', 'Model …');
