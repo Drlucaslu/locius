@@ -2255,6 +2255,10 @@ async function viewSettings(root) {
   // hosted installs only (the three OMUSE_STRIPE_* variables): the last section of Settings
   const sub = await sapi('subscription').catch(() => null);
   if (sub && sub.enabled) root.append(subscriptionCard(sub));
+  // #settings/<card id> (e.g. the password reminder's link): open the page at that section
+  const anchor = (location.hash.split('/')[1] || '').replace(/[^\w-]/g, '');
+  const target = anchor && document.getElementById(anchor);
+  if (target) { target.scrollIntoView({ block: 'start' }); target.querySelector('input')?.focus({ preventScroll: true }); }
 }
 
 // Standalone installs start on the password the host chose (OMUSE_PASSWORD): the chat reminds the user until they set
@@ -2265,7 +2269,7 @@ function passwordReminder() {
 }
 const pwBanner = () => h('div', { class: 'banner user', id: 'pwReminder', style: 'margin:10px 24px 0' },
   h('span', { style: 'flex:1' }, T('🔑 你还在用初始密码。请到「设置」里改成自己的密码。')),
-  h('a', { href: '#settings', class: 'btn small' }, T('去修改 Change')));
+  h('a', { href: '#settings/password', class: 'btn small' }, T('去修改 Change')));
 
 function passwordCard(info) {
   const cur = h('input', { type: 'password', autocomplete: 'current-password' });
