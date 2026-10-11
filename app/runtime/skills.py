@@ -1,9 +1,11 @@
 """Skills: SKILL.md files the agent can load (name + description in the prompt, full text on load_skill).
 
 Two places: the built-in ones shipped in app/skills (SKILLS_DIR) and the ones the user imported from GitHub, kept in
-$RUNTIME_DATA/skills so they survive upgrades. Which ones the agent sees is Settings → Skills (skills_disabled); when
-nothing was saved yet, OMUSE_SKILLS (comma-separated names) says which are on at startup, and without it every skill
-is on. A skill that is off is not listed in the prompt and load_skill refuses it.
+$RUNTIME_DATA/skills so they survive upgrades. Which ones the agent sees is Settings → Skills (skills_disabled), a
+list of names that are off. The list is written once, at the first start of a fresh database: from OMUSE_SKILLS
+(comma-separated names that are on; everything else off) or empty (everything on) when the variable is unset.
+After that the database decides and OMUSE_SKILLS is ignored. A skill that is off is not listed in the prompt and
+load_skill refuses it; a skill imported later is on (it is not in the list).
 """
 from __future__ import annotations
 
@@ -73,12 +75,20 @@ def env_disabled(names: list[str]) -> list[str]:
     return [n for n in names if n not in on]
 
 
+def seed(store) -> list[str] | None:
+    """First start of a fresh database: write the initial selection from OMUSE_SKILLS (or "everything on"). Returns the
+    list written, or None when the database already had one (then OMUSE_SKILLS is ignored)."""
+    if isinstance(store.settings().get("skills_disabled"), list):
+        return None
+    off = env_disabled([s["name"] for s in all_skills()])
+    store.set_settings({"skills_disabled": off})
+    return off
+
+
 def disabled_names(settings: dict) -> list[str]:
-    """The saved selection (Settings → Skills); until one is saved, OMUSE_SKILLS decides."""
+    """The saved selection (Settings → Skills); an unseeded database (tests, old installs before seed()) means all on."""
     saved = settings.get("skills_disabled")
-    if isinstance(saved, list):
-        return [str(x) for x in saved]
-    return env_disabled([s["name"] for s in all_skills()])
+    return [str(x) for x in saved] if isinstance(saved, list) else []
 
 
 def listing(settings: dict) -> list[dict]:

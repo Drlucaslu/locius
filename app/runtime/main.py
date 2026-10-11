@@ -43,6 +43,11 @@ async def lifespan(app):
     from app.common import stallwatch
     stallwatch.start(DATA, "runtime")
     rt = Runtime(DATA, publish)
+    from app.runtime import skills as SK
+    seeded = SK.seed(rt.store)
+    if seeded is not None:
+        print(f"[skills] initial selection written: {'all on' if not seeded else 'off: ' + ', '.join(seeded)}"
+              f"{' (from OMUSE_SKILLS)' if os.environ.get('OMUSE_SKILLS') else ''}", flush=True)
     sched = Scheduler(rt)
     sched.start()
     rt.health.start()
@@ -366,7 +371,7 @@ async def skills_list():
         x.pop("path", None)
         if x["source"] == "imported":
             x["url"] = SK.source_link(x["name"])
-    return {"skills": out, "env": (os.environ.get("OMUSE_SKILLS") or "").strip()}
+    return {"skills": out, "env": (os.environ.get("OMUSE_SKILLS") or "").strip()}   # env: informational only (seed at first start)
 
 
 @app.put("/api/skills")

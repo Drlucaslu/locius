@@ -85,7 +85,7 @@ Docker reads the file when the container is created: after editing it, `docker r
 | `OMUSE_USER` | Login name (default `omuse`) |
 | `OMUSE_AUTH=off` | No login — only behind another proxy that already authenticates |
 | `OMUSE_MODEL_URL`, `OMUSE_MODEL` | OpenAI-compatible endpoint and model id (defaults; a value saved in Settings wins) |
-| `OMUSE_SKILLS` | Optional, comma-separated skill names to enable at startup (e.g. `online-shopping,reply-email`); unset = every skill. The Skills page can change it and its saved selection wins; imported skills live in the data volume |
+| `OMUSE_SKILLS` | Optional, comma-separated skill names that are on when a fresh data volume is set up (e.g. `online-shopping,reply-email`); unset = every skill. Only read at that first start: afterwards the selection saved on the Skills page rules and the variable is ignored |
 | `OMUSE_PLANNER_MODEL`, `OMUSE_VISION_MODEL`, `OMUSE_STT_MODEL` | Optional model ids for planning, vision (screenshots, images) and speech-to-text on the same endpoint. Unset: planner and vision use `OMUSE_MODEL`, speech-to-text uses a whisper-like model if the endpoint has one. A value saved in Settings wins |
 | `OMUSE_MODEL_API_KEY` | API key for the model endpoint (environment only, not in Settings) |
 | `TZ` | Default timezone (a value saved in Settings wins) |

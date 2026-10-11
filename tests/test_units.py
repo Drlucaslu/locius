@@ -2997,14 +2997,20 @@ def test_skills_front_matter_links_and_env(monkeypatch, tmp_path):
     for bad in ("", "ftp://github.com/a/b", "https://gitlab.com/a/b", "https://github.com/onlyowner"):
         with pytest.raises(SK.SkillError):
             SK.raw_url(bad)
-    # OMUSE_SKILLS: unset = all on; set = only those on; a saved selection wins over it
+    # OMUSE_SKILLS seeds the selection once, at the first start of a fresh database; afterwards the database rules
     builtin = tmp_path / "b"; (builtin / "alpha").mkdir(parents=True); (builtin / "beta").mkdir()
     for n in ("alpha", "beta"):
         (builtin / n / "SKILL.md").write_text(f"---\nname: {n}\ndescription: {n} skill\n---\n", encoding="utf-8")
     monkeypatch.setattr(SK, "BUILTIN_DIR", str(builtin)); monkeypatch.setattr(SK, "USER_DIR", str(tmp_path / "u"))
-    monkeypatch.delenv("OMUSE_SKILLS", raising=False)
-    assert [s["name"] for s in SK.enabled({"skills_disabled": None})] == ["alpha", "beta"]
+    from app.runtime.store import RStore
     monkeypatch.setenv("OMUSE_SKILLS", "beta")
-    assert [s["name"] for s in SK.enabled({"skills_disabled": None})] == ["beta"]
-    assert [s["name"] for s in SK.enabled({"skills_disabled": []})] == ["alpha", "beta"]       # saved: everything on
-    assert [s["name"] for s in SK.enabled({"skills_disabled": ["beta"]})] == ["alpha"]
+    st = RStore(str(tmp_path / "db1"))
+    assert SK.seed(st) == ["alpha"] and [s["name"] for s in SK.enabled(st.settings())] == ["beta"]
+    monkeypatch.setenv("OMUSE_SKILLS", "alpha")                       # changed later: ignored, the database already has a list
+    assert SK.seed(st) is None and [s["name"] for s in SK.enabled(st.settings())] == ["beta"]
+    st.set_settings({"skills_disabled": []})                          # the user turned everything on
+    assert [s["name"] for s in SK.enabled(st.settings())] == ["alpha", "beta"]
+    monkeypatch.delenv("OMUSE_SKILLS", raising=False)
+    st2 = RStore(str(tmp_path / "db2"))
+    assert SK.seed(st2) == [] and [s["name"] for s in SK.enabled(st2.settings())] == ["alpha", "beta"]   # unset: all on
+    assert [s["name"] for s in SK.enabled({"skills_disabled": None})] == ["alpha", "beta"]              # unseeded: all on

@@ -2145,7 +2145,7 @@ async function viewSkills(root) {
   };
   root.append(h('div', { class: 'card stack', id: 'skills' }, h('h3', null, T('🎓 技能 Skills')),
     h('p', { class: 'sub' }, T('技能是一份 SKILL.md：告诉 Agent 某类任务怎么做（网购、订餐厅、回邮件…）。勾选的技能会出现在 Agent 的指令里，由它按需加载；取消勾选的技能 Agent 看不到。默认全部启用。')),
-    r.env ? h('p', { class: 'small muted' }, Tf("启动时由环境变量 OMUSE_SKILLS 指定：{0}（保存过的选择优先）", r.env)) : null,
+    r.env ? h('p', { class: 'small muted' }, Tf("首次启动时由环境变量 OMUSE_SKILLS 设定了初始选择：{0}。之后以这里保存的为准。", r.env)) : null,
     h('div', { class: 'row' },
       h('button', { class: 'btn small', onclick: () => Object.values(boxes).forEach(b => { b.checked = true; }) }, T('全选')),
       h('button', { class: 'btn small', onclick: () => Object.values(boxes).forEach(b => { b.checked = false; }) }, T('全不选')),
