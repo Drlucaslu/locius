@@ -384,10 +384,12 @@ class TelegramBot:
             rows.append([{"text": "🌐 在网页中查看/修改", "url": link}])
         await self.send("\n".join(lines), markup={"inline_keyboard": rows})
 
-    async def send_takeover(self, reason: str):
-        link = self.public_url("browser")
+    async def send_takeover(self, reason: str, task_id: str = ""):
+        """The button opens that task's browser tab (not just the Browser page): with several tasks the right one shows."""
+        link = self.public_url(f"browser/{task_id}" if task_id else "browser")
         rows = [[{"text": "🖐 打开浏览器接管 Take over", "url": link}]] if link else None
-        await self.send(f"🙋 <b>需要你接管浏览器</b>\n{html.escape(reason[:300])}\n\n完成后在网页里点「交还给 Agent」。",
+        await self.send(f"🙋 <b>需要你接管浏览器</b>\n{html.escape(reason[:300])}\n\n"
+                        + (f"{html.escape(link)}\n\n" if link else "") + "完成后在网页里点「交还给 Agent」。",
                         markup={"inline_keyboard": rows} if rows else None)
 
     async def on_callback(self, cq: dict):

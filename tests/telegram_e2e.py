@@ -27,6 +27,14 @@ check("/start answered with help", wait_for(lambda: any("/new" in t and "/tasks"
 st = c.get(B + "/sentinel/api/telegram/status").json()
 check("bot polling", st.get("running") and st.get("configured"), st)
 
+# a takeover request reaches the phone with a button to that task's own browser tab (links need the public address,
+# which Sentinel learns from a page load under a real host name)
+c.get(B + "/", headers={"Host": "omuse.example.com"})
+tk = c.post(B + "/api/chat", json={"message": "TAKEOVER needed"}, headers=H).json()
+check("takeover: Telegram message carries the task's browser-tab link",
+      wait_for(lambda: any("接管浏览器" in m.get("text", "") and f"omuse.example.com/#browser/{tk['task_id']}" in str(m.get("reply_markup", "")) for m in log()["sent"])),
+      [(m.get("text", "")[:60], m.get("reply_markup")) for m in log()["sent"][-3:]])
+c.post(B + "/sentinel/api/browser/release", json={}, headers=H)
 n_tasks = len(c.get(B + "/api/tasks").json()["tasks"])
 say("SEND hi from a stranger", chat=999)
 time.sleep(4)

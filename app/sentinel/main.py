@@ -346,6 +346,12 @@ async def internal_send_file(req: Request):
     return {"sent": True}
 
 
+@app.get("/internal/public_base", dependencies=[Depends(runtime_auth)])
+async def internal_public_base():
+    """The address users reach this OMuse at (learned from the first page load): for links in messages."""
+    return {"base": store.kv_get("public_base", "") or ""}
+
+
 @app.post("/internal/expire_approvals", dependencies=[Depends(runtime_auth)])
 async def internal_expire_approvals(req: Request):
     """A task ended without the user deciding (cancelled, or superseded by the next scheduled run):
@@ -822,9 +828,10 @@ async def _run(tool: str, args: dict, task_id: str, risk: str, detail: dict, dec
                     result=e.status, detail={**detail, "error": str(e)})
         if e.status == "waiting_user":
             if bot and bot.config():
-                asyncio.create_task(_safe(bot.send_takeover(str(args.get("reason", "")))))
+                asyncio.create_task(_safe(bot.send_takeover(str(args.get("reason", "")), task_id)))
             else:
-                asyncio.create_task(notify_phone(f"OMuse 请求你接管浏览器 Takeover requested：{args.get('reason', '')}"))
+                link = f"{store.kv_get('public_base', '') or ''}/#browser/{task_id}"
+                asyncio.create_task(notify_phone(f"OMuse 请求你接管浏览器 Takeover requested：{args.get('reason', '')}\n{link}"))
         return {"status": e.status, "error": str(e)}
     except Exception as e:  # unexpected
         store.audit("sentinel", tool, task_id=task_id, resource=t["connector"], risk=risk, decision=decision,
