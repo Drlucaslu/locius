@@ -14,7 +14,17 @@ def check(name, cond, info=""):
 
 async def main():
     import httpx
-    httpx.Client(trust_env=False).put(B + "api/settings", json={"language": "zh"}, headers={"X-Persona-UI": "1"})
+    H = {"X-Persona-UI": "1"}
+    c = httpx.Client(trust_env=False, timeout=30)
+    c.put(B + "api/settings", json={"language": "zh", "ui_language": "zh"}, headers=H)
+    # the page needs some memory to show (this suite used to run after batch2_e2e.py, which seeded it)
+    c.post(B + "api/memory", json={"fact": "我身高177，体重76公斤，鞋子42码，运动鞋43码。", "domain": "preference"}, headers=H)
+    c.post(B + "api/memory", json={"fact": "shop.test 网站支持访客结账；电话号码填 8 位，不要加 +65。", "domain": "site"}, headers=H)
+    c.post(B + "api/memory", json={"fact": "The user prefers business class seats.", "domain": "preference"}, headers=H)
+    c.post(B + "api/memory", json={"fact": "Mei collects jazz vinyl records.", "domain": "person", "entity": "Mei"}, headers=H)
+    mei = next((e for e in c.get(B + "api/memory", headers=H).json()["entities"] if e["name"] == "Mei"), None)
+    if mei:
+        c.put(f"{B}api/entities/{mei['id']}", json={"aliases": "梅梅", "relation": "太太"}, headers=H)
     async with async_playwright() as p:
         b = await p.chromium.launch()
         ctx = await b.new_context(viewport={"width": 1400, "height": 1000}, locale="zh-CN")

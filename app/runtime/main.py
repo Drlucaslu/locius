@@ -357,6 +357,78 @@ async def run_schedule(sid: str):
 
 
 # ------------------------------------------------------------------ memory
+# ------------------------------------------------------------------ research library
+async def _start_research(sub: dict, refresh: bool) -> dict:
+    from app.runtime import library as LIB
+    lang = rt.store.settings().get("language") or "zh"
+    rt.store.update_subject(sub["id"], status="researching", error="")
+    t = await rt.submit(sub["conv_id"], LIB.research_goal(sub, refresh, lang), source="library")
+    rt.store.update_subject(sub["id"], last_task=t["id"])
+    await publish({"kind": "conv_update", "conv_id": sub["conv_id"]})
+    await publish({"kind": "library_update", "subject_id": sub["id"]})
+    return t
+
+
+@app.get("/api/library")
+async def library_list():
+    return {"subjects": rt.store.subjects()}
+
+
+@app.post("/api/library")
+async def library_create(req: Request):
+    """A new research subject: its report file, its own conversation, and the first research task."""
+    from app.runtime import library as LIB
+    b = await req.json()
+    title = str(b.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "title required")
+    rec = LIB.new_subject(title, str(b.get("brief") or ""))
+    rec["conv_id"] = rt.store.create_conv(title, kind="research")
+    sub = rt.store.create_subject(rec)
+    os.makedirs(os.path.join(WORKSPACE, "library", sub["slug"]), exist_ok=True)
+    await rt.audit("user", "library.create", detail={"title": title, "slug": sub["slug"]})
+    t = await _start_research(sub, refresh=False)
+    return {"subject": rt.store.subject(sub["id"]), "task_id": t["id"]}
+
+
+@app.get("/api/library/search")
+async def library_search(q: str = ""):
+    return {"hits": rt.store.library_search(q, 10)}
+
+
+@app.get("/api/library/{sid}")
+async def library_get(sid: str):
+    from app.runtime import library as LIB
+    sub = rt.store.subject(sid)
+    if not sub:
+        raise HTTPException(404)
+    return {"subject": sub, "report": LIB.read_report(WORKSPACE, sub["slug"]), "path": LIB.report_path(sub["slug"])}
+
+
+@app.post("/api/library/{sid}/refresh")
+async def library_refresh(sid: str):
+    sub = rt.store.subject(sid)
+    if not sub:
+        raise HTTPException(404)
+    if sub["status"] == "researching" and sub["last_task"] and (rt.store.task(sub["last_task"]) or {}).get("status") not in TERMINAL:
+        raise HTTPException(409, "这个课题正在研究中 (research already running)")
+    await rt.audit("user", "library.refresh", detail={"slug": sub["slug"]})
+    t = await _start_research(sub, refresh=True)
+    return {"subject": rt.store.subject(sid), "task_id": t["id"]}
+
+
+@app.delete("/api/library/{sid}")
+async def library_delete(sid: str):
+    """Removes the subject and its index; the report files stay in the workspace and the chat stays in the list."""
+    sub = rt.store.subject(sid)
+    if not sub:
+        raise HTTPException(404)
+    rt.store.delete_subject(sid)
+    await rt.audit("user", "library.delete", detail={"slug": sub["slug"]})
+    await publish({"kind": "library_update", "subject_id": sid})
+    return {"ok": True}
+
+
 @app.get("/api/memory")
 async def memory():
     from app.runtime import memory_tidy as MT
@@ -370,7 +442,7 @@ async def memory():
             "domains": [{"key": k, "zh": zh, "en": en} for k, zh, en in DOMAINS], "entities": st.entities(),
             "profile": st.profile(), "profile_fields": [{"key": k, "zh": zh, "en": en} for k, zh, en in PROFILE_FIELDS],
             "pending": st.profile_pending(), "runs": runs, "job": MT.job_state(),
-            "needs_first_review": MT.needs_first_review(st),
+            "needs_first_review": MT.needs_first_review(st), "library": st.subjects(),
             "settings": {k: st.settings().get(k) for k in ("memory_consolidation", "memory_consolidate_at", "memory_extraction")}}
 
 

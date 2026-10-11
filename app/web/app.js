@@ -270,7 +270,7 @@ function renderConvList(list) {
   for (const el of lists) {
     el.innerHTML = '';
     el.append(h('button', { class: 'btn primary newchat', onclick: newChat, title: T('开始一个新对话（新的上下文）') }, T('＋ 新对话 New chat')));
-    const chats = S.convs.filter(c => c.kind === 'chat'), scheds = S.convs.filter(c => c.kind === 'schedule');
+    const chats = S.convs.filter(c => c.kind === 'chat'), scheds = S.convs.filter(c => c.kind === 'schedule'), research = S.convs.filter(c => c.kind === 'research');
     const mk = c => h('div', { class: 'conv' + (S.conv === c.id ? ' active' : ''), title: c.title, role: 'button', tabindex: '0',
         onclick: () => { closeHistory(); openConv(c.id); },
         onkeydown: e => { if (e.key === 'Enter') { closeHistory(); openConv(c.id); } } },
@@ -279,6 +279,7 @@ function renderConvList(list) {
       h('button', { class: 'cx', title: T('删除对话 Delete'), 'aria-label': T('删除对话'), onclick: e => { e.stopPropagation(); safe(deleteConv)(c.id); } }, '×'));
     if (chats.length) el.append(h('h4', null, T('对话 Chats')), ...chats.map(mk));
     else el.append(h('p', { class: 'small muted', style: 'padding:4px 8px' }, T('还没有对话')));
+    if (research.length) el.append(h('h4', null, T('研究 Research')), ...research.map(mk));
     if (scheds.length) el.append(h('h4', null, T('自动化 Automations')), ...scheds.map(mk));
   }
 }
@@ -619,6 +620,7 @@ function evLine(e) {
     case 'context_site': body = h('span', null, Tf("🧠 记得在 {0} 的习惯：{1}", d.site, (d.facts || []).join(T('；')))); break;
     case 'profile_read': body = h('span', { class: 'muted' }, Tf("🪪 读取档案：{0}", (d.fields || []).join(', ') || T('全部'))); break;
     case 'replanning': body = h('span', { style: 'color:var(--warn)' }, T('🔄 重新规划 Re-plan')); break;
+    case 'context_library': body = h('span', { class: 'muted' }, Tf("📚 带上了研究库的 {0} 段相关内容：{1}", (d.hits || []).length, (d.hits || []).map(x => x.title).join(T('；')))); break;
     case 'llm_retry': body = h('span', { style: 'color:var(--warn)' }, Tf("🔁 模型重试 {0}/{1}：{2}，{3} 秒后再试", d.attempt, d.of, d.reason || '', d.wait_s)); break;
     case 'chart': body = h('span', null, Tf("📊 图表：{0}", (d.title || d.path || ''))); break;
     case 'image': body = h('span', null, Tf("🎨 生成图片：{0}", ((d.paths || []).join(', ') || d.path || '') + (d.model ? '  (' + d.model + ', ' + (d.size || '') + ', ' + (d.latency_s || '') + 's)' : ''))); break;
@@ -1863,6 +1865,7 @@ async function viewMemory(root) {
   const [r, v] = await Promise.all([api('memory'), sapi('vault').catch(() => ({ items: [], kinds: {}, field_labels: {} }))]);
   root.append(
     h('div', { class: 'grid2' }, memProfileCard(r), h('div', { class: 'stack' }, memLearnedCard(r), memPendingCard(r), memTidyCard(r))),
+    h('div', { style: 'margin-top:16px' }, memLibraryCard(r)),
     h('div', { style: 'margin-top:16px' }, memFactsCard(r)),
     h('div', { class: 'grid2', style: 'margin-top:16px' }, memTryCard(r), memEntitiesCard(r)),
     h('div', { class: 'grid2', style: 'margin-top:16px' }, memRecentCard(r), memVaultCard(v)),
@@ -2025,6 +2028,44 @@ function memFactRow(f, recent, r) {
       h('button', { class: 'btn small', onclick: edit }, T('改')),
       h('button', { class: 'btn small', onclick: move, title: recent ? T('保留为长期记忆') : T('降为近期（30 天后过期）') }, recent ? T('保留') : T('降级')),
       h('button', { class: 'btn danger small', onclick: del }, T('忘记'))));
+}
+
+// ---- research library: subjects the agent researches in depth; each has a report file and its own chat
+const SUBJ_STATUS = () => ({ researching: T('研究中 researching'), ready: T('已完成 ready'), empty: T('没有内容 empty'), failed: T('失败 failed') });
+function memLibraryCard(r) {
+  const title = h('input', { type: 'text', placeholder: T('课题，例如：2026 年家用 NAS 选购') });
+  const brief = h('textarea', { rows: 3, placeholder: T('想知道什么、用来做什么。例如：预算 5000 元以内，4 盘位，要支持 Docker；比较主流型号的优缺点和价格。') });
+  const rows = (r.library || []).map(x => h('div', { class: 'row', style: 'justify-content:space-between;border-top:1px solid var(--line-2);padding:8px 0' },
+    h('div', { style: 'flex:1;min-width:200px' }, h('b', null, x.title), ' ', h('span', { class: 'pill st-' + ({ researching: 'RUNNING', ready: 'COMPLETED', empty: 'PAUSED', failed: 'FAILED' }[x.status] || 'CREATED') }, SUBJ_STATUS()[x.status] || x.status),
+      h('div', { class: 'small muted' }, x.brief ? x.brief.slice(0, 160) : '', x.error ? h('span', { style: 'color:var(--danger)' }, ' · ' + x.error) : null),
+      h('div', { class: 'small faint' }, Tf("更新于 {0} · 研究 {1} 次 · {2} 字", fmtTime(x.updated_at), x.runs || 0, x.chars || 0))),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn small', onclick: safe(async () => openReport(x.id)) }, T('📄 报告 Report')),
+      h('a', { class: 'btn small', href: '#chat/' + x.conv_id }, T('💬 对话 Chat')),
+      h('button', { class: 'btn small', disabled: x.status === 'researching', onclick: safe(async () => { await api('library/' + x.id + '/refresh', { method: 'POST', body: {} }); toast(T('已开始刷新 Refresh started')); route(); }) }, T('🔄 刷新 Refresh')),
+      h('button', { class: 'btn danger small', onclick: safe(async () => { if (!confirmInline(Tf("删除课题「{0}」？报告文件和对话会保留。", x.title))) return; await api('library/' + x.id, { method: 'DELETE' }); route(); }) }, T('删除')))));
+  return h('div', { class: 'card stack', id: 'library' }, h('h3', null, T('📚 研究库 Library')),
+    h('p', { class: 'sub' }, T('交给 OMuse 一个课题，它会深入研究并写成报告（工作区 library/ 下的 Markdown 文件）。之后在课题的对话里追问、补充、纠正，报告随之更新；「刷新」查找新变化。所有报告都可被 Agent 搜索，相关段落会在任务开始时自动带上。')),
+    rows.length ? h('div', null, ...rows) : h('div', { class: 'muted small' }, T('还没有课题。')),
+    h('details', null, h('summary', null, h('b', null, T('＋ 新课题 New subject'))),
+      h('div', { class: 'stack', style: 'margin-top:10px' },
+        h('label', { class: 'field' }, h('span', null, T('课题 Subject')), title),
+        h('label', { class: 'field' }, h('span', null, T('要求 Brief')), brief),
+        h('div', null, h('button', { class: 'btn primary', onclick: safe(async () => {
+          if (!title.value.trim()) throw new Error(T('请填写课题'));
+          const res = await api('library', { method: 'POST', body: { title: title.value, brief: brief.value } });
+          toast(T('研究已开始，完成后会出现在列表里 Research started')); location.hash = '#chat/' + res.subject.conv_id;
+        }) }, T('开始研究 Start research'))))));
+}
+
+async function openReport(id) {
+  const r = await api('library/' + id);
+  closeModal();
+  const back = h('div', { class: 'modal-back', onclick: e => { if (e.target === back) closeModal(); } });
+  const m = h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': r.subject.title, style: 'max-width:900px' },
+    h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, r.subject.title), h('span', { class: 'small muted mono' }, r.path), h('button', { class: 'icon-btn', onclick: closeModal, 'aria-label': T('关闭') }, '✕')),
+    r.report ? mdEl(r.report) : h('p', { class: 'muted' }, T('报告还是空的。')));
+  back.append(m); $('#modalRoot').append(back);
 }
 
 function memFactsCard(r) {
@@ -2291,6 +2332,7 @@ function onEvent(ev) {
     toast('🔔 ' + ev.notification.title + T('：') + ev.notification.body);
   } else if (ev.kind === 'memory_update' && S.view === 'memory') { const a = document.activeElement; if (!(a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && a.closest('#view'))) route(); }
   else if ((ev.kind === 'schedule_update' || ev.kind === 'goal_update') && S.view === 'schedules') route();
+  else if (ev.kind === 'library_update' && S.view === 'memory') { const a = document.activeElement; if (!(a && /INPUT|TEXTAREA/.test(a.tagName))) route(); }
 }
 
 // Takeover requests arriving close together (several tasks blocked on the same site) become ONE pop-up, and the same
