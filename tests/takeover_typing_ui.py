@@ -4,15 +4,34 @@ import asyncio, sys, httpx
 from playwright.async_api import async_playwright
 B = "http://127.0.0.1:8080/"
 TEXT = "lucas.persona+test@example.com"
+
+
+async def wait_state(pred, timeout=20.0):
+    """Poll the browser state until pred(state) holds: the first takeover relaunches Chromium headed and only then opens
+    the takeover tab; under load (a full suite run) that takes longer than a fixed pause, which made this suite flaky."""
+    import asyncio, time
+    t0 = time.time()
+    st = {}
+    while time.time() - t0 < timeout:
+        try:
+            st = httpx.get(B + "sentinel/api/browser/state", trust_env=False, timeout=10).json()
+            if pred(st):
+                return st
+        except Exception:
+            pass
+        await asyncio.sleep(0.3)
+    return st
 async def main():
     # this test reads the Chinese UI labels; the language is a server setting since 0.2.8
     httpx.put(B + "api/settings", json={"language": "zh"}, headers={"X-Persona-UI": "1"}, trust_env=False)
     async with async_playwright() as p:
         br = await p.chromium.launch(); pg = await br.new_page(viewport={"width": 1400, "height": 900}, locale="zh-CN")
         await pg.goto(B + "#browser"); await pg.wait_for_timeout(1500)
-        await pg.click("button.take"); await pg.wait_for_timeout(800)
+        await pg.click("button.take"); await wait_state(lambda st: st.get("mode") == "user" and not st.get("headless") and st.get("tasks")); await pg.wait_for_timeout(1500)
         await pg.fill(".bbar .url", "http://shop.test:8099/popup_login.html"); await pg.click("text=前往 Go")
-        await pg.wait_for_timeout(2500)
+        st = await wait_state(lambda st: "popup_login" in (st.get("url") or ""))
+        assert "popup_login" in (st.get("url") or ""), f"page did not open: {st}"
+        await pg.wait_for_timeout(800)
         img = pg.locator(".screen-wrap img"); bb = await img.bounding_box()
         nat = await img.evaluate("i => [i.naturalWidth, i.naturalHeight]")
         sx, sy = bb["width"] / nat[0], bb["height"] / nat[1]
@@ -39,7 +58,8 @@ async def first_key_without_click():
         sent = []
         pg.on("request", lambda r: sent.append(r.post_data) if "browser/input" in r.url else None)
         await pg.goto(B + "#browser"); await pg.wait_for_timeout(1500)
-        await pg.click("button.take"); await pg.wait_for_timeout(1500)
+        await pg.click("button.take"); await wait_state(lambda st: st.get("mode") == "user" and not st.get("headless") and st.get("tasks")); await pg.wait_for_timeout(1500)
+        await pg.wait_for_timeout(800)
         hint = await pg.locator(".kbd-hint").text_content()
         img = pg.locator(".screen-wrap img"); bb = await img.bounding_box()
         nat = await img.evaluate("i => [i.naturalWidth, i.naturalHeight]")
