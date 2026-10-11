@@ -2982,3 +2982,29 @@ def test_retry_after_header_parsing():
     assert retry_after({"retry-after": "99999"}) == RETRY_AFTER_MAX                       # capped
     assert 25 <= retry_after({"retry-after": email.utils.formatdate(time.time() + 30, usegmt=True)}) <= 31   # HTTP date
     assert retry_after({"retry-after": email.utils.formatdate(time.time() - 60, usegmt=True)}) == 0.0        # in the past: now
+
+
+def test_skills_front_matter_links_and_env(monkeypatch, tmp_path):
+    from app.runtime import skills as SK
+    assert SK.front_matter("---\nname: x-y\ndescription: does things\n---\n# body") == {"name": "x-y", "description": "does things"}
+    assert SK.front_matter("# no front matter") == {}
+    monkeypatch.setattr(SK, "GITHUB_RAW", "https://raw.githubusercontent.com")
+    assert SK.raw_url("https://github.com/acme/skills") == "https://raw.githubusercontent.com/acme/skills/HEAD/SKILL.md"
+    assert SK.raw_url("https://github.com/acme/skills.git") == "https://raw.githubusercontent.com/acme/skills/HEAD/SKILL.md"
+    assert SK.raw_url("https://github.com/acme/skills/tree/main/skills/flight-watch") == "https://raw.githubusercontent.com/acme/skills/main/skills/flight-watch/SKILL.md"
+    assert SK.raw_url("https://github.com/acme/skills/blob/dev/fw/SKILL.md") == "https://raw.githubusercontent.com/acme/skills/dev/fw/SKILL.md"
+    assert SK.raw_url("https://raw.githubusercontent.com/acme/skills/main/fw/SKILL.md") == "https://raw.githubusercontent.com/acme/skills/main/fw/SKILL.md"
+    for bad in ("", "ftp://github.com/a/b", "https://gitlab.com/a/b", "https://github.com/onlyowner"):
+        with pytest.raises(SK.SkillError):
+            SK.raw_url(bad)
+    # OMUSE_SKILLS: unset = all on; set = only those on; a saved selection wins over it
+    builtin = tmp_path / "b"; (builtin / "alpha").mkdir(parents=True); (builtin / "beta").mkdir()
+    for n in ("alpha", "beta"):
+        (builtin / n / "SKILL.md").write_text(f"---\nname: {n}\ndescription: {n} skill\n---\n", encoding="utf-8")
+    monkeypatch.setattr(SK, "BUILTIN_DIR", str(builtin)); monkeypatch.setattr(SK, "USER_DIR", str(tmp_path / "u"))
+    monkeypatch.delenv("OMUSE_SKILLS", raising=False)
+    assert [s["name"] for s in SK.enabled({"skills_disabled": None})] == ["alpha", "beta"]
+    monkeypatch.setenv("OMUSE_SKILLS", "beta")
+    assert [s["name"] for s in SK.enabled({"skills_disabled": None})] == ["beta"]
+    assert [s["name"] for s in SK.enabled({"skills_disabled": []})] == ["alpha", "beta"]       # saved: everything on
+    assert [s["name"] for s in SK.enabled({"skills_disabled": ["beta"]})] == ["alpha"]

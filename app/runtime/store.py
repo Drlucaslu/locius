@@ -67,6 +67,7 @@ DEFAULT_SETTINGS = {
     "language": "",          # the agent's language (zh / en); "" = not chosen yet: filled from the browser on first visit
     "ui_language": "",       # the web UI's language: "" = follow the browser (en / zh / tw), or one of those
     "theme": "auto",         # web UI theme: auto (follow the system) / ink (dark) / paper (off-white)
+    "skills_disabled": None, # names turned off in Settings → Skills; None = never saved: OMUSE_SKILLS decides (unset = all on)
     "reply_language": "",    # "" = answer in Settings → Language; "match" = answer in the language of each request
     "memory_extraction": True,
     "memory_consolidation": True,     # tidy memory once a day (merge, promote, expire) and send a short report

@@ -133,6 +133,14 @@ async def chat(req: Request):
         if last.startswith("(System) Settings → Language is English"):
             return reply("Here is the most important email: the security alert from Google Workspace about a suspicious login.")
         return reply("最重要的邮件是 Google Workspace 发来的可疑登录安全告警，建议尽快检查。")
+    if "SKILLCHECK" in goal:   # report which skills the agent's instructions list
+        sysm = msgs[0]["content"] if msgs and msgs[0]["role"] == "system" else ""
+        sec = sysm.split("## Skills", 1)[1].split("\n## ", 1)[0] if "## Skills" in sysm else sysm
+        return reply("SKILLS=" + ",".join(re.findall(r"^- ([\w.-]+):", sec, re.M)))
+    if "LOADSKILL" in goal:
+        if n == 0:
+            return reply("", [tc("load_skill", {"name": goal.split("LOADSKILL")[1].split()[0]})])
+        return reply("LOADED=" + last_tool[:120])
     if "LANGCHECK" in goal:   # report what language the agent's instructions are in
         import re as _re
         cjk = _re.compile(r"[\u3400-\u9fff]")
