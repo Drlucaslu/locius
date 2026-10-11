@@ -270,12 +270,6 @@ class LLM:
             body["tool_choice"] = "auto"
         if s.get("disable_thinking") or no_think:
             body["chat_template_kwargs"] = {"enable_thinking": False}
-        extra = s.get("extra_body")
-        if extra:
-            try:
-                body.update(json.loads(extra) if isinstance(extra, str) else extra)
-            except Exception:
-                pass
         timeout = float(s.get("llm_timeout") or 600)
         queued = time.time()
         retries = {"after": 0, "backoff": 0}

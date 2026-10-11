@@ -2743,29 +2743,52 @@ def test_image_tools_guard_paths_prompts_and_masks(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_settings_test_image_endpoint(monkeypatch):
-    from app.runtime import main as rmain, imagegen
+async def test_settings_test_models_endpoint(monkeypatch):
+    """One standard request per model; the image model is only resolved and checked against the endpoint's list."""
+    from app.runtime import main as rmain, imagegen, llm as L
+
     class Req:
+        headers = {"content-length": "2"}
         def __init__(self, b): self._b = b
         async def json(self): return self._b
+
+    calls = []
+
+    class FakeLLM:
+        def __init__(self, get_settings, **kw): self.s = get_settings()
+        async def chat(self, messages, tools=None, **kw):
+            model = kw.get("model") or self.s["model_name"]
+            calls.append((model, "image_url" in str(messages)))
+            if model == "missing-model":
+                raise L.LLMError("model API error HTTP 404: no such model")
+            return {"content": "OK", "tool_calls": [], "usage": {}}
+        async def stt_model(self): return self.s.get("stt_model") or ""
+        async def transcribe(self, audio, filename="a.wav", task_id=""): return ""
+    monkeypatch.setattr(L, "LLM", FakeLLM)
+
     async def fake_list(base):
         return [{"id": "gpt-image-1"}, {"id": "gpt-4o"}]
     monkeypatch.setattr(imagegen, "list_models", fake_list)
+
     class _Store:
-        def settings(self): return {"model_base_url": "http://x/v1"}
+        def settings(self): return {"model_base_url": "http://x/v1", "model_name": "gpt-4o", "planner_model": "", "vision_model": "",
+                                    "stt_model": "", "image_model": "", "llm_timeout": 60}
     class _RT:
         store = _Store()
     monkeypatch.setattr(rmain, "rt", _RT())
-    monkeypatch.delenv("OMUSE_IMAGE_API_KEY", raising=False)
-    r = await rmain.test_image(Req({"image_base_url": "https://api.openai.com/v1", "image_model": "gpt-image-1"}))
-    assert r["ok"] and r["model"] == "gpt-image-1" and r["base"] == "https://api.openai.com/v1" and r["listed"] is True
-    r = await rmain.test_image(Req({"image_base_url": "https://api.openai.com/v1", "image_model": "dall-e-9"}))
-    assert not r["ok"] and "dall-e-9" in r["error"]
-    r = await rmain.test_image(Req({"image_base_url": "", "image_model": ""}))   # auto-pick on the model endpoint
-    assert r["ok"] and r["model"] == "gpt-image-1"
-    monkeypatch.setenv("OMUSE_IMAGE_API_KEY", "k")
-    r = await rmain.test_image(Req({"image_model": "gpt-image-1"}))
-    assert r["key"] == "OMUSE_IMAGE_API_KEY"
+    r = await rmain.test_models(Req({}))
+    by = {x["kind"]: x for x in r["results"]}
+    assert [x["kind"] for x in r["results"]] == ["llm", "planner", "vision", "stt", "image"]
+    assert by["llm"]["ok"] and by["llm"]["model"] == "gpt-4o" and by["planner"]["same_as"] == "llm"
+    assert by["vision"]["ok"] and by["vision"]["model"] == "gpt-4o" and calls[1] == ("gpt-4o", True)   # a real image request
+    assert not by["stt"]["ok"] and "speech-to-text" in by["stt"]["error"]
+    assert by["image"]["ok"] and by["image"]["resolved_model"] == "gpt-image-1" and "not generated" in by["image"]["reply"]
+    # the form's values are tested, including a planner the endpoint lacks and an explicit image model it does not list
+    r = await rmain.test_models(Req({"planner_model": "missing-model", "stt_model": "whisper-1", "image_model": "dall-e-9"}))
+    by = {x["kind"]: x for x in r["results"]}
+    assert not by["planner"]["ok"] and "404" in by["planner"]["error"]
+    assert by["stt"]["ok"] and by["stt"]["model"] == "whisper-1"
+    assert not by["image"]["ok"] and "dall-e-9" in by["image"]["error"]
 
 
 def test_image_size_header_parser(tmp_path):

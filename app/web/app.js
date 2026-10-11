@@ -2209,29 +2209,30 @@ async function viewSettings(root) {
   const field = (k, zh, en, type = 'text', help) => { const i = h('input', { type, value: s[k] ?? '' }); f[k] = i;
     return h('label', { class: 'field' }, h('span', null, `${zh} `, LANG === 'en' ? null : h('span', { class: 'muted' }, en)), i, help ? h('span', null, help) : null); };
   const tog = (k, zh) => { const i = h('input', { type: 'checkbox', checked: !!s[k] }); f[k] = i; return h('label', { class: 'toggle' }, i, zh); };
-  const testOut = h('span', { class: 'small muted' });
-  const imgOut = h('span', { class: 'small muted' });
+  const testOut = h('div', { class: 'stack', style: 'gap:2px' });
   root.append(h('div', { class: 'grid2' },
     interfaceCard(s, f),
-    h('div', { class: 'card stack' }, h('h3', null, T('🧠 模型 Model')),
-      h('p', { class: 'sub' }, T('任何 OpenAI 兼容接口都可以用。每类请求可以交给不同的提供商，没有哪家模型提供商能看到你的全部信息；推理、网页浏览和工具调用都在云端完成。')),
-      field('model_base_url', T('接口地址'), 'Base URL'), field('model_name', T('执行模型'), 'Model'),
-      field('planner_model', T('规划模型（留空=同上）'), 'Planner model'),
-      field('vision_model', T('视觉模型（看网页截图，留空=同执行模型）'), 'Vision model'),
-      field('stt_model', T('语音转文字模型（听音视频附件，留空=自动寻找 whisper 类模型）'), 'Speech-to-text model'),
-      field('temperature', T('温度'), 'Temperature', 'number'), field('max_tokens', T('单次最大输出'), 'Max tokens', 'number'),
+    h('div', { class: 'card stack' }, h('h3', null, T('🧠 模型 Models')),
+      h('p', { class: 'sub' }, T('任何 OpenAI 兼容接口都可以用。每类请求可以交给不同的模型，没有哪家模型提供商能看到你的全部信息；推理、网页浏览和工具调用都在云端完成。')),
+      field('model_base_url', T('接口地址'), 'Base URL'),
+      field('model_name', T('LLM（执行任务）'), 'LLM'),
+      field('planner_model', T('规划模型（留空=同 LLM）'), 'Planner'),
+      field('vision_model', T('视觉模型（看截图和图片，留空=同 LLM）'), 'Vision'),
+      field('stt_model', T('语音转文字模型（留空=自动寻找 whisper 类模型）'), 'Speech-to-text'),
+      field('image_model', T('图像生成模型（留空=自动）'), 'Image'),
       field('llm_timeout', T('超时（秒）'), 'Timeout s', 'number'),
-      tog('disable_thinking', T('关闭思考模式（更快，复杂任务效果可能下降）Disable thinking')),
-      field('extra_body', T('额外请求参数 JSON'), 'Extra body'),
-      h('div', { class: 'row' }, h('button', { class: 'btn small', onclick: safe(async () => { testOut.textContent = T('测试中…'); const t = await api('settings/test-model', { method: 'POST', body: {} });
-        testOut.textContent = t.ok ? Tf("✓ {0}s：{1}", (t.latency_s), (t.reply)) : '✕ ' + t.error; }) }, T('测试模型 Test model')), testOut),
-      h('h3', { style: 'margin-top:12px' }, T('🎨 图片生成 Images')),
-      h('p', { class: 'sub' }, T('留空 = 用上面的接口地址并自动寻找图像模型。接 OpenAI 时填 https://api.openai.com/v1 + gpt-image-1；密钥只能通过环境变量 OMUSE_IMAGE_API_KEY 提供，不在这里填。')),
-      field('image_base_url', T('图片接口地址（留空=同上）'), 'Image base URL'),
-      field('image_model', T('图像模型（留空=自动）'), 'Image model'),
-      h('div', { class: 'row' }, h('button', { class: 'btn small', onclick: safe(async () => { imgOut.textContent = T('检查中…');
-        const t = await api('settings/test-image', { method: 'POST', body: { image_base_url: f.image_base_url.value, image_model: f.image_model.value } });
-        imgOut.textContent = t.ok ? Tf("✓ {0} @ {1}（密钥：{2}）", t.model, t.base, t.key) : '✕ ' + t.error; }) }, T('检查图片接口 Check image endpoint')), imgOut)),
+      h('div', { class: 'row' }, h('button', { class: 'btn small', onclick: safe(async () => {
+        testOut.replaceChildren(h('span', { class: 'small muted' }, T('测试中…')));
+        const body = {}; for (const k of ['model_base_url', 'model_name', 'planner_model', 'vision_model', 'stt_model', 'image_model']) body[k] = f[k].value;
+        const t = await api('settings/test-models', { method: 'POST', body });
+        const label = { llm: 'LLM', planner: T('规划 Planner'), vision: T('视觉 Vision'), stt: T('语音转文字 STT'), image: T('图像 Image') };
+        testOut.replaceChildren(...t.results.map(x => h('div', { class: 'small' }, (x.ok ? '✓ ' : '✕ ') + (label[x.kind] || x.kind) + (x.model ? ` (${x.model})` : '') + ': ',
+          x.same_as ? T('同 LLM') : x.ok ? `${x.latency_s}s — ${x.reply || ''}` : (x.error || ''))));
+      }) }, T('测试所有模型 Test models'))),
+      testOut,
+      h('h3', { style: 'margin-top:12px' }, T('LLM 参数')),
+      field('temperature', T('温度'), 'Temperature', 'number'), field('max_tokens', T('单次最大输出'), 'Max tokens', 'number'),
+      tog('disable_thinking', T('关闭思考模式（更快，复杂任务效果可能下降）Disable thinking'))),
     h('div', { class: 'card stack' }, h('h3', null, '🤖 Agent'),
       langField(s, f),
       field('user_name', T('你的名字'), 'Your name'), field('timezone', T('时区（定时任务）'), 'Timezone'),

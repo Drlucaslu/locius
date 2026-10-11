@@ -87,7 +87,8 @@ Docker reads the file when the container is created: after editing it, `docker r
 | `OMUSE_AUTH=off` | No login — only behind another proxy that already authenticates |
 | `OMUSE_MODEL_URL`, `OMUSE_MODEL` | OpenAI-compatible endpoint and model id (defaults; a value saved in Settings wins) |
 | `OMUSE_SKILLS` | Optional, comma-separated skill names that are on when a fresh data volume is set up (e.g. `online-shopping,reply-email`); unset = every skill. Only read at that first start: afterwards the selection saved on the Skills page rules and the variable is ignored |
-| `OMUSE_PLANNER_MODEL`, `OMUSE_VISION_MODEL`, `OMUSE_STT_MODEL` | Optional model ids for planning, vision (screenshots, images) and speech-to-text on the same endpoint. Unset: planner and vision use `OMUSE_MODEL`, speech-to-text uses a whisper-like model if the endpoint has one. A value saved in Settings wins |
+| `OMUSE_PLANNER_MODEL`, `OMUSE_VISION_MODEL`, `OMUSE_STT_MODEL`, `OMUSE_IMAGE_MODEL` | Optional model ids for planning, vision (screenshots, images), speech-to-text and image generation on the same endpoint. Unset: planner and vision use `OMUSE_MODEL`, speech-to-text uses a whisper-like model if the endpoint has one, images auto-pick an image model. A value saved in Settings wins |
+| `OMUSE_IMAGE_URL`, `OMUSE_IMAGE_API_KEY` | Advanced: a separate OpenAI-Images-compatible endpoint and key for image generation; unset = the model endpoint and its key |
 | `OMUSE_MODEL_API_KEY` | API key for the model endpoint (environment only, not in Settings) |
 | `TZ` | Default timezone (a value saved in Settings wins) |
 | `TELEGRAM_BOT=0`, `VOICE_PORT=0` | Turn off the Telegram bot / the phone port |
