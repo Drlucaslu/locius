@@ -11,22 +11,22 @@ on:
         required: true
         type: string
       import_release:
-        description: Import into the configured Products Provisioner
+        description: Import using a product callback (leave disabled for registry image sources)
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: release-image-${{ github.event_name == 'push' && github.ref_name || inputs.version }}
   cancel-in-progress: false
 
 env:
-  IMAGE_REPOSITORY: registry.fly.io/${{ vars.LOCIUS_IMAGE_APP }}
   VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
   PRODUCT_KEY: ${{ vars.RELEASE_PRODUCT_KEY || 'locius' }}
-  IMPORT_RELEASE: ${{ github.event_name == 'push' || inputs.import_release }}
+  IMPORT_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.import_release }}
 
 jobs:
   build:
@@ -35,18 +35,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Set GHCR image repository
+        run: echo "IMAGE_REPOSITORY=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
       - name: Validate release configuration
         env:
-          LOCIUS_IMAGE_APP: ${{ vars.LOCIUS_IMAGE_APP }}
-          LOCIUS_FLY_ORG: ${{ vars.LOCIUS_FLY_ORG }}
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           RELEASE_IMPORT_URL: ${{ vars.RELEASE_IMPORT_URL }}
           RELEASE_IMPORT_TOKEN: ${{ secrets.RELEASE_IMPORT_TOKEN }}
         run: |
           set -euo pipefail
-          : "${LOCIUS_IMAGE_APP:?Set LOCIUS_IMAGE_APP}"
-          : "${LOCIUS_FLY_ORG:?Set LOCIUS_FLY_ORG}"
-          : "${FLY_API_TOKEN:?Set FLY_API_TOKEN}"
           [[ "$VERSION" =~ ^locius-v[0-9][A-Za-z0-9._-]*$ && ${#VERSION} -le 128 ]]
           [[ "$PRODUCT_KEY" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
           if [[ "$IMPORT_RELEASE" == true ]]; then
@@ -57,11 +54,12 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      - name: Build Fly image locally on runner
+      - name: Build application image locally on runner
         run: |
           docker buildx build \
             --platform linux/amd64 \
             --file Dockerfile.fly \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "org.opencontainers.image.version=$VERSION" \
             --tag "$IMAGE_REPOSITORY:$VERSION" \
@@ -70,22 +68,12 @@ jobs:
       - name: Smoke test image before publishing
         run: bash tests/docker_image_smoke.sh "$IMAGE_REPOSITORY:$VERSION"
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-
-      - name: Ensure image repository app exists in designated organization
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          LOCIUS_IMAGE_APP: ${{ vars.LOCIUS_IMAGE_APP }}
-          LOCIUS_FLY_ORG: ${{ vars.LOCIUS_FLY_ORG }}
-        run: |
-          if ! flyctl status --app "$LOCIUS_IMAGE_APP" >/dev/null 2>&1; then
-            flyctl apps create "$LOCIUS_IMAGE_APP" --org "$LOCIUS_FLY_ORG"
-          fi
-
-      - name: Log in to registry
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl auth docker
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push the tested image and record immutable digest
         id: image

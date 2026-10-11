@@ -113,26 +113,43 @@ Then open `https://<app>.fly.dev` and sign in as `omuse`. The model endpoint and
 ### Publish images for Products Provisioner
 
 `.github/workflows/release-image.yml` builds `Dockerfile.fly` for **linux/amd64**,
-tests the resulting image, pushes that same image to Fly's registry, then imports
-its immutable digest into Products Provisioner. It does not deploy customer
+tests the resulting image, then pushes that same image to
+`ghcr.io/<repository-owner>/locius` (lowercase). Tag releases publish only;
+Products Provisioner can import a specified tag using its registry image source.
+It does not deploy customer
 instances or change their pinned image. No login password, LLM key, or Stripe key
 is baked into the image; those are supplied to each instance at runtime.
 
-Set these under GitHub **Settings → Secrets and variables → Actions**:
+Publishing uses the workflow's `GITHUB_TOKEN` with `packages: write`; no Fly token,
+image-repository app, or organization variable is required. After the first push,
+make the GHCR package **public** in its package settings: a public source
+repository does not automatically make a new container package public.
+
+Publish this image source in the provisioner's `product.toml`, then use **Sync
+image** with the new release tag and review/activate its inherited `image.toml`:
+
+```toml
+[image_source]
+type = "registry"
+repository = "ghcr.io/darumadocker/locius"
+```
+
+Use a new release version when switching from Fly's registry: the provisioner
+does not allow an existing version to change its image reference. Existing
+deployments retain their pinned images.
+
+For an optional manual callback import, set these under GitHub **Settings →
+Secrets and variables → Actions**:
 
 | Kind | Name | Value |
 |---|---|---|
-| Variable | `LOCIUS_IMAGE_APP` | Globally unique Fly image-repository app name, e.g. `locius-images-test` |
-| Variable | `LOCIUS_FLY_ORG` | Fly organization slug for that repository app |
 | Variable | `RELEASE_PRODUCT_KEY` | Product key in the provisioner; defaults to `locius` (independent of the OMuse display name) |
 | Variable | `RELEASE_IMPORT_URL` | Provisioner HTTPS origin only, e.g. `https://product-provisioner.fly.dev` (no `/api/images` suffix) |
-| Secret | `FLY_API_TOKEN` | Token allowed to push images and create the repository app in the designated organization |
 | Secret | `RELEASE_IMPORT_TOKEN` | This product's image-source `callback_token`, **not** `PP_ADMIN_TOKEN` or `PP_MASTER_KEY` |
 
-Publish the product's callback configuration in the provisioner before the first
-automatic import. Configure its Fly credentials for the same organization that
-can pull the private image. The workflow creates the image-repository app if
-missing; that app stores images and does not need a running Machine or volume.
+Only enable manual `import_release` if the product uses a **callback** image
+source. Registry products reject callback imports. Public GHCR images can be
+pulled by Fly without private registry credentials.
 
 After committing and pushing the workflow, tag the intended source commit:
 
@@ -145,7 +162,7 @@ git push origin locius-v0.1.0
 Tag pushes run the workflow from the tagged commit, even while it lives on this
 branch. Manual dispatch becomes available once the workflow is on the default
 branch; choose the desired source branch and enter a `locius-v*` version. A manual
-run can disable `import_release` to publish an image before a product is ready.
+run can enable `import_release` for a callback-backed product; it defaults to false.
 Use a new version for changed source; do not move existing release tags.
 
 Imports use `POST /api/images` with `product_key`, `version`, `image` (digest), and
