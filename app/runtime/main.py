@@ -43,6 +43,11 @@ async def lifespan(app):
     from app.common import stallwatch
     stallwatch.start(DATA, "runtime")
     rt = Runtime(DATA, publish)
+    from app.runtime import skills as SK
+    seeded = SK.seed(rt.store)
+    if seeded is not None:
+        print(f"[skills] initial selection written: {'all on' if not seeded else 'off: ' + ', '.join(seeded)}"
+              f"{' (from OMUSE_SKILLS)' if os.environ.get('OMUSE_SKILLS') else ''}", flush=True)
     sched = Scheduler(rt)
     sched.start()
     rt.health.start()
@@ -357,6 +362,53 @@ async def run_schedule(sid: str):
 
 
 # ------------------------------------------------------------------ memory
+# ------------------------------------------------------------------ skills
+@app.get("/api/skills")
+async def skills_list():
+    from app.runtime import skills as SK
+    out = SK.listing(rt.store.settings())
+    for x in out:
+        x.pop("path", None)
+        if x["source"] == "imported":
+            x["url"] = SK.source_link(x["name"])
+    return {"skills": out, "env": (os.environ.get("OMUSE_SKILLS") or "").strip()}   # env: informational only (seed at first start)
+
+
+@app.put("/api/skills")
+async def skills_select(req: Request):
+    """Which skills are on: the body lists the names that are off (an empty list = everything on)."""
+    from app.runtime import skills as SK
+    b = await req.json()
+    known = {s["name"] for s in SK.all_skills()}
+    off = sorted({str(x) for x in (b.get("disabled") or []) if str(x) in known})
+    rt.store.set_settings({"skills_disabled": off})
+    await rt.audit("user", "skills.select", detail={"disabled": off})
+    return {"skills": [{k: v for k, v in x.items() if k != "path"} for x in SK.listing(rt.store.settings())]}
+
+
+@app.post("/api/skills/import")
+async def skills_import(req: Request):
+    from app.runtime import skills as SK
+    b = await req.json()
+    try:
+        info = await SK.import_from_github(str(b.get("url") or ""))
+    except SK.SkillError as e:
+        raise HTTPException(400, str(e))
+    await rt.audit("user", "skills.import", resource=info["name"], detail={"url": info["url"]})
+    return {"skill": info}
+
+
+@app.delete("/api/skills/{name}")
+async def skills_delete(name: str):
+    from app.runtime import skills as SK
+    if not SK.delete_imported(name):
+        raise HTTPException(404, "只能删除导入的技能 (only imported skills can be removed)")
+    cur = rt.store.settings().get("skills_disabled")
+    if isinstance(cur, list):
+        rt.store.set_settings({"skills_disabled": [x for x in cur if x != name]})
+    await rt.audit("user", "skills.delete", resource=name)
+
+
 # ------------------------------------------------------------------ research library
 async def _start_research(sub: dict, refresh: bool) -> dict:
     from app.runtime import library as LIB

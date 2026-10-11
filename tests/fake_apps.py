@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 import httpx
 
 app = FastAPI()
@@ -308,6 +308,25 @@ async def g_create(cid: str, req: Request):
     G["events"].append(ev)
     G["log"].append({"create": b, "sendUpdates": req.query_params.get("sendUpdates")})
     return ev
+
+
+# ---------------------------------------------------------------- GitHub raw (skills_e2e.py imports a skill)
+SKILL_MD = """---
+name: flight-watch
+description: 盯航班价格 Watch a flight's price and tell the user when it drops.
+---
+# Flight watch
+1. browser_search the route; 2. note the price; 3. watch_create with price_below.
+"""
+
+
+@app.get("/ghraw/{path:path}")
+async def ghraw(path: str):
+    if path.endswith("SKILL.md") and "flight-watch" in path:
+        return PlainTextResponse(SKILL_MD)
+    if path.endswith("SKILL.md") and "noname" in path:
+        return PlainTextResponse("# no front matter here\n")
+    return PlainTextResponse("not found", status_code=404)
 
 
 @app.get("/_g")

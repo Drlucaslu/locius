@@ -2984,6 +2984,38 @@ def test_retry_after_header_parsing():
     assert retry_after({"retry-after": email.utils.formatdate(time.time() - 60, usegmt=True)}) == 0.0        # in the past: now
 
 
+def test_skills_front_matter_links_and_env(monkeypatch, tmp_path):
+    from app.runtime import skills as SK
+    assert SK.front_matter("---\nname: x-y\ndescription: does things\n---\n# body") == {"name": "x-y", "description": "does things"}
+    assert SK.front_matter("# no front matter") == {}
+    monkeypatch.setattr(SK, "GITHUB_RAW", "https://raw.githubusercontent.com")
+    assert SK.raw_url("https://github.com/acme/skills") == "https://raw.githubusercontent.com/acme/skills/HEAD/SKILL.md"
+    assert SK.raw_url("https://github.com/acme/skills.git") == "https://raw.githubusercontent.com/acme/skills/HEAD/SKILL.md"
+    assert SK.raw_url("https://github.com/acme/skills/tree/main/skills/flight-watch") == "https://raw.githubusercontent.com/acme/skills/main/skills/flight-watch/SKILL.md"
+    assert SK.raw_url("https://github.com/acme/skills/blob/dev/fw/SKILL.md") == "https://raw.githubusercontent.com/acme/skills/dev/fw/SKILL.md"
+    assert SK.raw_url("https://raw.githubusercontent.com/acme/skills/main/fw/SKILL.md") == "https://raw.githubusercontent.com/acme/skills/main/fw/SKILL.md"
+    for bad in ("", "ftp://github.com/a/b", "https://gitlab.com/a/b", "https://github.com/onlyowner"):
+        with pytest.raises(SK.SkillError):
+            SK.raw_url(bad)
+    # OMUSE_SKILLS seeds the selection once, at the first start of a fresh database; afterwards the database rules
+    builtin = tmp_path / "b"; (builtin / "alpha").mkdir(parents=True); (builtin / "beta").mkdir()
+    for n in ("alpha", "beta"):
+        (builtin / n / "SKILL.md").write_text(f"---\nname: {n}\ndescription: {n} skill\n---\n", encoding="utf-8")
+    monkeypatch.setattr(SK, "BUILTIN_DIR", str(builtin)); monkeypatch.setattr(SK, "USER_DIR", str(tmp_path / "u"))
+    from app.runtime.store import RStore
+    monkeypatch.setenv("OMUSE_SKILLS", "beta")
+    st = RStore(str(tmp_path / "db1"))
+    assert SK.seed(st) == ["alpha"] and [s["name"] for s in SK.enabled(st.settings())] == ["beta"]
+    monkeypatch.setenv("OMUSE_SKILLS", "alpha")                       # changed later: ignored, the database already has a list
+    assert SK.seed(st) is None and [s["name"] for s in SK.enabled(st.settings())] == ["beta"]
+    st.set_settings({"skills_disabled": []})                          # the user turned everything on
+    assert [s["name"] for s in SK.enabled(st.settings())] == ["alpha", "beta"]
+    monkeypatch.delenv("OMUSE_SKILLS", raising=False)
+    st2 = RStore(str(tmp_path / "db2"))
+    assert SK.seed(st2) == [] and [s["name"] for s in SK.enabled(st2.settings())] == ["alpha", "beta"]   # unset: all on
+    assert [s["name"] for s in SK.enabled({"skills_disabled": None})] == ["alpha", "beta"]              # unseeded: all on
+
+
 def test_library_slug_chunks_and_search(tmp_path):
     from app.runtime import library as LIB
     from app.runtime.store import RStore

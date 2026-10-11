@@ -23,6 +23,7 @@ from app.common.util import dumps, new_id, now_ts, truncate
 from app.runtime import attachments as AT
 from app.runtime import library as LIB
 from app.runtime import outcome, prompts
+from app.runtime import skills as SK
 from app.runtime.llm import LLM, LLMContextError, LLMError, extract_json, strip_tool_markup
 from app.runtime.store import RStore
 
@@ -1133,16 +1134,8 @@ class Runtime:
         return hist, "\n".join(lines[-8:])
 
     def skills(self) -> list[dict]:
-        out = []
-        if not os.path.isdir(SKILLS_DIR):
-            return out
-        for name in sorted(os.listdir(SKILLS_DIR)):
-            p = os.path.join(SKILLS_DIR, name, "SKILL.md")
-            if os.path.isfile(p):
-                txt = open(p, encoding="utf-8").read()
-                m = re.search(r"^description:\s*(.+)$", txt, re.M)
-                out.append({"name": name, "description": m.group(1).strip() if m else "", "path": p})
-        return out
+        """The skills the agent may use: built-in + imported, minus the ones turned off in Settings → Skills."""
+        return SK.enabled(self.store.settings())
 
     def _facts_for(self, goal: str, history_txt: str = "", task_id: str = "") -> list[dict]:
         """Long-term facts for this task (personal context v1, app/runtime/context.py): the ones that matter for what
@@ -3303,9 +3296,12 @@ class Runtime:
                 pass
             return "已通知用户 user notified"
         if name == "load_skill":
+            want = str(a.get("name", "")).strip()
             for sk in self.skills():
-                if sk["name"] == str(a.get("name", "")).strip():
+                if sk["name"] == want:
                     return open(sk["path"], encoding="utf-8").read()
+            if any(sk["name"] == want for sk in SK.all_skills()):
+                return f"ERROR: 技能 {want} 已在「设置 → 技能」里关闭 (this skill is turned off in Settings → Skills)"
             return "ERROR: 没有这个技能 unknown skill. Available: " + ", ".join(s["name"] for s in self.skills())
         if name == "delegate":
             return await self._subagent(t, str(a.get("role", "researcher")), str(a.get("task", "")))

@@ -9,7 +9,7 @@ export PYTHONPATH=$PWD
 (cd tests/pages && env -u HTTPS_PROXY -u HTTP_PROXY python3 -m http.server 8099 >$T/pages.log 2>&1 &)
 TEST_PAGE=http://shop.test:8099/page.html python3 -m uvicorn tests.fake_llm:app --port 8090 >$T/llm.log 2>&1 &
 env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy BROWSER_PROFILE=$T/bprofile SEARCH_ENGINES=empty=http://shop.test:8094/emptysearch?q=,duckduckgo=http://shop.test:8094/ddg?q= python3 -m uvicorn app.browser.main:app --port 8082 >$T/browser.log 2>&1 &
-RUNTIME_DATA=$T/data PERSONA_MODEL_URL=http://127.0.0.1:8090/v1 PERSONA_MODEL=fake python3 -m uvicorn app.runtime.main:app --port 8081 >$T/runtime.log 2>&1 &
+RUNTIME_DATA=$T/data GITHUB_RAW_URL=http://127.0.0.1:8094/ghraw PERSONA_MODEL_URL=http://127.0.0.1:8090/v1 PERSONA_MODEL=fake python3 -m uvicorn app.runtime.main:app --port 8081 >$T/runtime.log 2>&1 &
 python3 -m uvicorn tests.fake_telegram:app --port 8091 >$T/tg.log 2>&1 &
 python3 -m uvicorn tests.fake_mcp:app --port 8093 >$T/mcp.log 2>&1 &
 python3 -m uvicorn tests.fake_apps:app --port 8094 >$T/apps.log 2>&1 &

@@ -136,7 +136,7 @@ const S = {
 const VIEWS = [
   ['chat', '💬', T('对话'), 'Chat'], ['tasks', '🗂', T('任务'), 'Tasks'], ['browser', '🌐', T('浏览器'), 'Browser'],
   ['schedules', '⚡', T('自动化'), 'Automations'], ['connections', '🔌', T('连接'), 'Connections'], ['memory', '🧠', T('记忆'), 'Memory'],
-  ['trust', '📈', T('可信度'), 'Trust'], ['activity', '📜', T('活动审计'), 'Audit'], ['settings', '⚙️', T('设置'), 'Settings'],
+  ['trust', '📈', T('可信度'), 'Trust'], ['skills', '🎓', T('技能'), 'Skills'], ['activity', '📜', T('活动审计'), 'Audit'], ['settings', '⚙️', T('设置'), 'Settings'],
 ];
 
 function renderNav() {
@@ -163,7 +163,7 @@ function route() {
   renderNav();
   const view = $('#view'); view.innerHTML = '';
   ({ chat: viewChat, tasks: viewTasks, browser: viewBrowser, schedules: viewSchedules, connections: viewConnections,
-     memory: viewMemory, trust: viewTrust, activity: viewActivity, settings: viewSettings })[S.view](view);
+     memory: viewMemory, trust: viewTrust, skills: viewSkills, activity: viewActivity, settings: viewSettings })[S.view](view);
 }
 
 // ================================================================== CHAT
@@ -2168,6 +2168,40 @@ async function viewActivity(root) {
 }
 
 // ================================================================== SETTINGS
+// ================================================================== SKILLS
+async function viewSkills(root) {
+  const r = await api('skills');
+  const boxes = {};
+  const row = k => h('label', { class: 'row', style: 'align-items:flex-start;gap:10px;padding:8px 0;border-top:1px solid var(--line-2);cursor:pointer' },
+    boxes[k.name] = h('input', { type: 'checkbox', checked: k.enabled, style: 'margin-top:4px' }),
+    h('div', { style: 'flex:1;min-width:200px' }, h('span', { class: 'mono' }, k.name), ' ',
+      h('span', { class: 'pill ' + (k.source === 'imported' ? 'st-RUNNING' : 'st-CREATED') }, k.source === 'imported' ? T('导入 imported') : T('内置 built-in')),
+      h('div', { class: 'small muted' }, B(k.description)),
+      k.url ? h('div', { class: 'small faint mono' }, k.url) : null),
+    k.source === 'imported' ? h('button', { class: 'btn danger small', onclick: safe(async e => { e.preventDefault(); if (!confirmInline(Tf("删除导入的技能「{0}」？", k.name))) return; await api('skills/' + k.name, { method: 'DELETE' }); route(); }) }, T('删除')) : null);
+  const url = h('input', { type: 'text', placeholder: 'https://github.com/owner/repo/tree/main/skills/my-skill' });
+  const save = async () => {
+    const disabled = Object.entries(boxes).filter(([, b]) => !b.checked).map(([n]) => n);
+    await api('skills', { method: 'PUT', body: { disabled } }); toast(T('已保存 Saved'));
+  };
+  root.append(h('div', { class: 'card stack', id: 'skills' }, h('h3', null, T('🎓 技能 Skills')),
+    h('p', { class: 'sub' }, T('技能是一份 SKILL.md：告诉 Agent 某类任务怎么做（网购、订餐厅、回邮件…）。勾选的技能会出现在 Agent 的指令里，由它按需加载；取消勾选的技能 Agent 看不到。默认全部启用。')),
+    r.env ? h('p', { class: 'small muted' }, Tf("首次启动时由环境变量 OMUSE_SKILLS 设定了初始选择：{0}。之后以这里保存的为准。", r.env)) : null,
+    h('div', { class: 'row' },
+      h('button', { class: 'btn small', onclick: () => Object.values(boxes).forEach(b => { b.checked = true; }) }, T('全选')),
+      h('button', { class: 'btn small', onclick: () => Object.values(boxes).forEach(b => { b.checked = false; }) }, T('全不选')),
+      h('span', { class: 'small muted' }, Tf("{0} 个技能", r.skills.length))),
+    h('div', null, ...r.skills.map(row)),
+    h('div', null, h('button', { class: 'btn primary', onclick: safe(save) }, T('保存选择 Save')))),
+  h('div', { class: 'card stack', style: 'margin-top:16px', id: 'skillImport' }, h('h3', null, T('⬇ 从 GitHub 导入技能 Import')),
+    h('p', { class: 'sub' }, T('粘贴 GitHub 上技能的链接：仓库（根目录有 SKILL.md）、技能所在的目录（…/tree/分支/路径）或 SKILL.md 文件本身。导入的技能保存在这台 OMuse 上，默认启用。只导入你信任的技能：它的内容就是给 Agent 的指令。')),
+    h('div', { class: 'row' }, h('div', { style: 'flex:1;min-width:260px' }, url),
+      h('button', { class: 'btn primary', onclick: safe(async () => {
+        const res = await api('skills/import', { method: 'POST', body: { url: url.value } });
+        toast(Tf("已导入技能「{0}」", res.skill.name)); route();
+      }) }, T('导入 Import')))));
+}
+
 async function viewSettings(root) {
   const r = await api('settings');
   const s = r.settings;
@@ -2206,7 +2240,7 @@ async function viewSettings(root) {
       tog('memory_extraction', T('任务结束后自动提取长期记忆 Auto memory extraction')),
       tog('memory_consolidation', T('每天自动整理记忆并发送报告到 Telegram Daily memory tidy')),
       field('memory_consolidate_at', T('每天整理时间（HH:MM）'), 'Tidy at'),
-      h('div', null, h('b', null, T('技能 Skills')), h('ul', { class: 'small' }, r.skills.map(k => h('li', null, h('span', { class: 'mono' }, k.name), ' — ', B(k.description)))))),
+      h('div', null, h('b', null, T('技能 Skills')), ' ', h('a', { href: '#skills', class: 'small' }, Tf("{0} 个已启用 · 在「技能」页管理", r.skills.length)))),
   ), h('div', { style: 'margin-top:16px' }, h('button', { class: 'btn primary', onclick: safe(async () => {
     const body = {};
     for (const [k, el] of Object.entries(f)) body[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
