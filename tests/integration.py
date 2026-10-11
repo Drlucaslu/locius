@@ -82,6 +82,10 @@ if sch:
 tid = chat("TAKEOVER needed")
 t = wait(tid, {"WAITING_EXTERNAL", "COMPLETED", "FAILED"})
 check("takeover request pauses task", t["status"] == "WAITING_EXTERNAL", t["status"])
+msgs = c.get(B + "/api/conversations/" + t["conv_id"]).json()["messages"]
+said = [m for m in msgs if m["role"] == "assistant" and m["task_id"] == tid]
+check("the agent says it needs a takeover, with a direct link to this task's browser tab",
+      said and "please log in" in said[-1]["content"] and f"#browser/{tid}" in said[-1]["content"], [m["content"][:160] for m in said])
 st = c.get(B + "/sentinel/api/browser/state").json()
 check("broker shows takeover request", (st.get("requested") or {}).get("task_id") == tid, st)
 c.post(B + "/sentinel/api/browser/takeover", json={"task_id": tid}, headers=H)

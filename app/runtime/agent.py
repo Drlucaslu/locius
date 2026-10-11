@@ -823,6 +823,15 @@ class Runtime:
             r.raise_for_status()
             return r.json()
 
+    async def browser_link(self, task_id: str) -> str:
+        """Absolute link to a task's browser tab when the public address is known (Sentinel learns it from the first
+        page load), else the in-app #browser/<task> link."""
+        try:
+            base = (await self.sentinel("GET", "/internal/public_base", timeout=5)).get("base") or ""
+        except Exception:
+            base = ""
+        return f"{base}/#browser/{task_id}" if base else f"#browser/{task_id}"
+
     async def audit(self, actor: str, action: str, task_id: str = "", **kw):
         try:
             await self.sentinel("POST", "/internal/audit", {"actor": actor, "action": action, "task_id": task_id, **kw}, timeout=10)
@@ -2061,18 +2070,30 @@ class Runtime:
 
     async def _suspend(self, task_id: str, sp: Suspend, transcript: list[dict]):
         self.store.update_task(task_id, transcript=transcript, pending=sp.waiting.pop("_pending"), waiting=sp.waiting)
-        await self.set_status(task_id, sp.status, waiting=sp.waiting)
-        await self.event(task_id, "waiting", sp.waiting)
         t = self.store.task(task_id)
+        notify = []   # published after the status flips (the messages are stored first, so a poll on the status never misses them)
         if sp.status == "WAITING_APPROVAL":
             self.store.add_msg(t["conv_id"], "system", dumps({"type": "approval", "approval_id": sp.waiting.get("approval_id"),
                                                                "title": (sp.waiting.get("summary") or {}).get("title", ""),
                                                                "task_id": task_id}), task_id)
-            await self.publish({"kind": "approval_requested", "task_id": task_id, "approval_id": sp.waiting.get("approval_id")})
+            notify.append({"kind": "approval_requested", "task_id": task_id, "approval_id": sp.waiting.get("approval_id")})
         elif sp.waiting.get("type") == "takeover_requested":
-            self.store.add_msg(t["conv_id"], "system", dumps({"type": "takeover", "reason": sp.waiting.get("reason", ""),
-                                                               "task_id": task_id}), task_id)
-            await self.publish({"kind": "takeover_requested", "task_id": task_id, "reason": sp.waiting.get("reason", "")})
+            reason = str(sp.waiting.get("reason", "") or "")
+            self.store.add_msg(t["conv_id"], "system", dumps({"type": "takeover", "reason": reason, "task_id": task_id}), task_id)
+            # said in the agent's own words too, with a direct link to this task's browser tab: it travels with the
+            # message (Telegram, notifications, copied text), unlike the card's button
+            link = await self.browser_link(task_id)
+            en = agent_lang(self.store.settings()) == "en"
+            self.store.add_msg(t["conv_id"], "assistant",
+                               (f"I need you to take over the browser{': ' + reason if reason else ''}.\n\nOpen this task's browser tab: {link}\n"
+                                f"When you are done, click \"Hand back\" there and I will continue." if en else
+                                f"需要你接管浏览器{'：' + reason if reason else ''}。\n\n打开这个任务的浏览器标签页：{link}\n完成后在那里点「交还给 Agent」，我会继续。"),
+                               task_id)
+            notify.append({"kind": "takeover_requested", "task_id": task_id, "reason": reason})
+        await self.set_status(task_id, sp.status, waiting=sp.waiting)
+        await self.event(task_id, "waiting", sp.waiting)
+        for ev in notify:
+            await self.publish(ev)
         await self.publish({"kind": "conv_update", "conv_id": t["conv_id"]})
 
     # ================================================================ tool execution
