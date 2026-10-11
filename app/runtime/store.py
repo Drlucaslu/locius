@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS facts (
   created_at REAL, last_verified REAL, ttl_days INTEGER
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(id UNINDEXED, fact, entity, tokenize='trigram');
+CREATE TABLE IF NOT EXISTS subjects (
+  id TEXT PRIMARY KEY, slug TEXT UNIQUE, title TEXT, brief TEXT, status TEXT, conv_id TEXT, created_at REAL, updated_at REAL,
+  last_task TEXT, runs INTEGER DEFAULT 0, chars INTEGER DEFAULT 0, error TEXT DEFAULT ''
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS library_fts USING fts5(subject_id UNINDEXED, heading, text, tokenize='trigram');
 CREATE TABLE IF NOT EXISTS episodes (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, task_id TEXT, summary TEXT);
 CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, type TEXT, name TEXT, attrs TEXT, created_at REAL);
 CREATE TABLE IF NOT EXISTS relations (src TEXT, rel TEXT, dst TEXT, source TEXT, created_at REAL);
@@ -200,6 +205,61 @@ class RStore:
 
     def conv(self, cid: str) -> dict | None:
         return self.db.one("SELECT * FROM conversations WHERE id=?", (cid,))
+
+    # ------------------------------------------------------------ research library (app/runtime/library.py)
+    def subjects(self) -> list[dict]:
+        return self.db.all("SELECT * FROM subjects ORDER BY updated_at DESC")
+
+    def subject(self, sid: str) -> dict | None:
+        return self.db.one("SELECT * FROM subjects WHERE id=?", (sid,))
+
+    def subject_by_conv(self, cid: str) -> dict | None:
+        return self.db.one("SELECT * FROM subjects WHERE conv_id=?", (cid,)) if cid else None
+
+    def create_subject(self, rec: dict) -> dict:
+        base, n = rec["slug"], 2
+        while self.db.one("SELECT id FROM subjects WHERE slug=?", (rec["slug"],)):
+            rec["slug"] = f"{base}-{n}"; n += 1
+        self.db.insert("subjects", rec)
+        return self.subject(rec["id"])
+
+    def update_subject(self, sid: str, **kw) -> None:
+        data = {k: v for k, v in kw.items() if k in ("title", "brief", "status", "conv_id", "last_task", "runs", "chars", "error")}
+        data["updated_at"] = now_ts()
+        self.db.update("subjects", "id", sid, data)
+
+    def delete_subject(self, sid: str) -> None:
+        self.db.execute("DELETE FROM library_fts WHERE subject_id=?", (sid,))
+        self.db.execute("DELETE FROM subjects WHERE id=?", (sid,))
+
+    def library_replace(self, sid: str, pieces: list[tuple[str, str]]) -> None:
+        self.db.execute("DELETE FROM library_fts WHERE subject_id=?", (sid,))
+        for heading, text in pieces:
+            self.db.execute("INSERT INTO library_fts(subject_id, heading, text) VALUES (?,?,?)", (sid, heading, text))
+
+    def library_search(self, query: str, limit: int = 6) -> list[dict]:
+        """Report passages matching the query: FTS (trigram) first, a plain LIKE fallback; each hit names its subject."""
+        terms = [t for t in re.split(r"[\s,，。.!?？！;；:：]+", query or "") if len(t) >= 2][:12]
+        if not terms:
+            return []
+        subs = {x["id"]: x for x in self.subjects()}
+        q = " OR ".join('"' + t.replace('"', "") + '"' for t in terms)
+        try:
+            rows = self.db.all("SELECT subject_id, heading, text, bm25(library_fts) AS rank FROM library_fts WHERE library_fts MATCH ? "
+                               "ORDER BY rank LIMIT ?", (q, limit))
+        except Exception:
+            rows = []
+        if not rows:
+            like = [f"%{t}%" for t in terms]
+            cond = " OR ".join("text LIKE ?" for _ in like)
+            rows = self.db.all(f"SELECT subject_id, heading, text FROM library_fts WHERE {cond} LIMIT ?", (*like, limit))
+        out = []
+        for r in rows:
+            sub = subs.get(r["subject_id"])
+            if sub:
+                out.append({"subject_id": sub["id"], "slug": sub["slug"], "title": sub["title"], "heading": r["heading"] or "",
+                            "text": r["text"]})
+        return out
 
     def set_conv_title(self, cid: str, title: str) -> None:
         self.db.execute("UPDATE conversations SET title=? WHERE id=?", (title[:80], cid))

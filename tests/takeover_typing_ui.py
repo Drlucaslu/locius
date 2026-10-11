@@ -48,6 +48,8 @@ async def first_key_without_click():
         hint2 = await pg.locator(".kbd-hint").text_content()
         await pg.keyboard.press("Control+a"); await pg.keyboard.press("Backspace")
         await pg.evaluate("document.activeElement.blur()")   # focus lost (e.g. user clicked elsewhere)
+        await pg.wait_for_timeout(300)
+        hint3 = await pg.locator(".kbd-hint").text_content()
         await pg.keyboard.type("abc", delay=30); await pg.wait_for_timeout(2500)
         print("sent:", sent)
         await pg.click("button.release"); await pg.wait_for_timeout(800)
@@ -56,8 +58,10 @@ async def first_key_without_click():
     st = c.get(B + "sentinel/api/browser/state").json()
     snap = c.post("http://127.0.0.1:8082/agent/snapshot", json={"task_id": st["view_task"]}, headers={"X-Browser-Token": "bt-test"}).json()
     line = [l for l in snap["snapshot"].splitlines() if "Email or phone" in l]
-    print(hint, "|", hint2, "|", line)
-    ok = "先点一下" in hint and "键盘已连接" in hint2 and line and 'value="abc"' in line[0]
+    print(hint, "|", hint2, "|", hint3, "|", line)
+    # since 0.2.52 the keyboard is connected as soon as you take over (focus goes to the page right away); the "click a
+    # field first" hint shows once focus is lost, and typing then still reaches the page
+    ok = "键盘已连接" in hint and "键盘已连接" in hint2 and "先点一下" in hint3 and line and 'value="abc"' in line[0]
     print("PASS select-all/delete + typing without focus" if ok else "FAIL select-all/typing without focus")
     return ok
 

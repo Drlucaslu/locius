@@ -3014,3 +3014,31 @@ def test_skills_front_matter_links_and_env(monkeypatch, tmp_path):
     st2 = RStore(str(tmp_path / "db2"))
     assert SK.seed(st2) == [] and [s["name"] for s in SK.enabled(st2.settings())] == ["alpha", "beta"]   # unset: all on
     assert [s["name"] for s in SK.enabled({"skills_disabled": None})] == ["alpha", "beta"]              # unseeded: all on
+
+
+def test_library_slug_chunks_and_search(tmp_path):
+    from app.runtime import library as LIB
+    from app.runtime.store import RStore
+    assert LIB.slugify("Home NAS 2026: what to buy?") == "home-nas-2026-what-to-buy"
+    assert LIB.slugify("家用 NAS 选购").startswith("nas-") and LIB.slugify("家用 NAS 选购") == LIB.slugify("家用 NAS 选购")
+    assert LIB.slugify("家用 NAS 选购") != LIB.slugify("办公 NAS 选购") and LIB.slugify("选购").startswith("subject-")
+    text = "# Title\n\nintro line\n\n## A\n" + ("para one. " * 60) + "\n\n" + ("para two. " * 60) + "\n\n## B\nshort\n"
+    pieces = LIB.chunks(text)
+    assert [h for h, _ in pieces] == ["Title", "A", "A", "B"] and all(len(t) <= LIB.CHUNK_CHARS + 20 for _, t in pieces)
+    assert LIB.chunks("") == [] and LIB.chunks("\n\n") == []
+    st = RStore(str(tmp_path))
+    sub = st.create_subject(LIB.new_subject("Home NAS 2026", "cheap"))
+    sub2 = st.create_subject(LIB.new_subject("Home NAS 2026", "again"))
+    assert sub["slug"] == "home-nas-2026" and sub2["slug"] == "home-nas-2026-2"          # unique folders
+    ws = tmp_path / "ws"
+    (ws / "library" / sub["slug"]).mkdir(parents=True)
+    (ws / "library" / sub["slug"] / "report.md").write_text("# Home NAS\n## Candidates\nUGREEN DXP4800 runs Docker.\n## Noise\nquiet at idle\n", encoding="utf-8")
+    assert LIB.index_subject(st, str(ws), sub) == 2 and st.subject(sub["id"])["status"] == "ready"
+    hits = st.library_search("docker nas", 5)
+    assert hits and hits[0]["title"] == "Home NAS 2026" and hits[0]["heading"] == "Candidates" and "DXP4800" in hits[0]["text"]
+    assert st.library_search("", 5) == [] and st.library_search("zzzz-nothing", 5) == []
+    assert LIB.index_subject(st, str(ws), sub2) == 0 and st.subject(sub2["id"])["status"] == "empty"   # no report yet
+    st.delete_subject(sub["id"])
+    assert st.library_search("docker", 5) == [] and st.subject(sub["id"]) is None
+    assert "RESEARCH SUBJECT: Home NAS 2026" in LIB.research_goal(sub2, False, "en") and "REFRESH" in LIB.research_goal(sub2, True, "en")
+    assert "Current report" in LIB.chat_context(sub2, "# x", "en") and "当前报告" in LIB.chat_context(sub2, "", "zh")
