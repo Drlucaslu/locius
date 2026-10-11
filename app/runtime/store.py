@@ -78,7 +78,6 @@ DEFAULT_SETTINGS = {
     "memory_consolidation": True,     # tidy memory once a day (merge, promote, expire) and send a short report
     "memory_consolidate_at": "03:30",  # local time (Settings → Timezone)
     "disable_thinking": False,
-    "extra_body": "",
     "llm_timeout": 600,
 }
 

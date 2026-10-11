@@ -738,7 +738,7 @@ async def put_settings(req: Request):
     if "memory_consolidate_at" in b and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", str(b["memory_consolidate_at"]).strip()):
         raise HTTPException(400, "整理时间格式应为 HH:MM (time must be HH:MM)")
     s = rt.store.set_settings(b)
-    await rt.audit("user", "settings.update", detail={k: v for k, v in b.items() if k != "extra_body"})
+    await rt.audit("user", "settings.update", detail=b)
     return {"settings": s}
 
 
@@ -753,32 +753,77 @@ async def test_model():
         return {"ok": False, "error": str(e)[:500]}
 
 
-@app.post("/api/settings/test-image")
-async def test_image(req: Request):
-    """Reachability check for the image endpoint — resolves base URL + model and lists models; never generates (no cost)."""
+@app.post("/api/settings/test-models")
+async def test_models(req: Request):
+    """One standard request per configured model — LLM, planner, vision, speech-to-text — and a reachability check for
+    the image model (a generation would be billed). The body may carry the form's current values, so the user can test
+    before saving."""
     from app.runtime import imagegen
-    b = await req.json()
+    from app.runtime.llm import LLM, LLMError
+    b = await req.json() if (req.headers.get("content-length") or "0") not in ("0", "") else {}
     s = dict(rt.store.settings())
-    for k in ("image_base_url", "image_model"):
+    for k in ("model_base_url", "model_name", "planner_model", "vision_model", "stt_model", "image_model", "llm_timeout"):
         if k in b:
-            s[k] = str(b[k] or "").strip()
-    t0 = time.time()
-    try:
+            s[k] = b[k]
+    llm = LLM(lambda: s)
+    results = []
+
+    async def timed(kind, model, coro):
+        t0 = time.time()
+        try:
+            detail = await coro
+            results.append({"kind": kind, "model": model, "ok": True, "latency_s": round(time.time() - t0, 2), **(detail or {})})
+        except Exception as e:
+            results.append({"kind": kind, "model": model, "ok": False, "latency_s": round(time.time() - t0, 2), "error": str(e)[:400]})
+
+    async def chat_ok(model=None):
+        r = await llm.chat([{"role": "user", "content": "只回复 OK 两个字母。Reply with just OK."}], purpose="test", max_tokens=400,
+                           no_think=True, model=model)
+        return {"reply": (r["content"] or "")[:120]}
+
+    async def vision_ok():
+        import base64, io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (48, 48), (220, 30, 30)).save(buf, format="PNG")
+        data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+        r = await llm.chat([{"role": "user", "content": [{"type": "text", "text": "What colour is this square? One word."},
+                                                          {"type": "image_url", "image_url": {"url": data_url}}]}],
+                           purpose="test", max_tokens=200, no_think=True, model=s.get("vision_model") or None)
+        return {"reply": (r["content"] or "")[:120]}
+
+    async def image_ok():
         base, model = await imagegen.resolve(s)
         listed = None
         try:
-            ids = [str(m.get("id") or "") for m in await imagegen.list_models(base)]
-            listed = model in ids
+            listed = model in [str(m.get("id") or "") for m in await imagegen.list_models(base)]
         except Exception:
-            pass   # some image servers have no /models; the explicit model is still usable
-        key = "OMUSE_IMAGE_API_KEY" if os.environ.get("OMUSE_IMAGE_API_KEY", "").strip() else (
-            "model key" if imagegen.auth_headers() else "none")
+            pass
         if listed is False:
-            return {"ok": False, "error": f"端点可达，但模型列表里没有 {model} (endpoint reachable, but it does not list {model})",
-                    "base": base, "model": model, "key": key}
-        return {"ok": True, "base": base, "model": model, "key": key, "listed": listed, "latency_s": round(time.time() - t0, 2)}
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:500]}
+            raise LLMError(f"endpoint reachable, but it does not list {model}")
+        return {"reply": f"{model} @ {base}" + (" (listed)" if listed else "") + " — not generated (billed)", "resolved_model": model}
+
+    await timed("llm", str(s.get("model_name") or ""), chat_ok())
+    if str(s.get("planner_model") or "").strip():
+        await timed("planner", s["planner_model"], chat_ok(s["planner_model"]))
+    else:
+        results.append({"kind": "planner", "model": "", "ok": True, "same_as": "llm"})
+    await timed("vision", str(s.get("vision_model") or "") or str(s.get("model_name") or ""), vision_ok())
+    stt_model = str(s.get("stt_model") or "").strip() or await llm.stt_model()
+    if stt_model:
+        s_stt = dict(s, stt_model=stt_model)
+        llm_stt = LLM(lambda: s_stt)
+        async def stt_with():
+            import io, wave
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
+                w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b"\x00\x00" * 4800)
+            return {"reply": (await llm_stt.transcribe(buf.getvalue(), "silence.wav") or "(no speech)")[:120]}
+        await timed("stt", stt_model, stt_with())
+    else:
+        results.append({"kind": "stt", "model": "", "ok": False, "error": "no speech-to-text model: set one, or the endpoint lists none (whisper-like)"})
+    await timed("image", str(s.get("image_model") or "") or "(auto)", image_ok())
+    return {"results": results}
 
 
 # ------------------------------------------------------------------ workspace files (read-only for the UI)
