@@ -23,6 +23,7 @@ OMuse is a local-first AI agent for [Olares](https://www.olares.com). It doesn't
 - **MCP connectors** – plug in any MCP (Model Context Protocol) server; tool definitions are pinned.
 - **Automations** – multi-day goals, event triggers (new email / Slack message / Notion change) and schedules.
 - **Telegram remote control** – give tasks and approve actions from your phone.
+- **Research library** – give it a subject; it researches in depth, writes a Markdown report you refine in that subject's chat and refresh later; every report is searchable by the agent.
 - **Memory & skills**, **English / 中文 UI**.
 
 ### Safe by design
@@ -204,6 +205,7 @@ OMuse 是为 [Olares](https://www.olares.com) 打造的本地优先（local-firs
 - **MCP 连接器**：接入任意 MCP（Model Context Protocol，模型上下文协议）服务器，工具定义锁定防篡改。
 - **自动化**：持续多天推进的场景目标、事件触发（新邮件 / Slack 新消息 / Notion 变化）、定时任务。
 - **Telegram 遥控**：在手机上布置任务、一键审批。
+- **研究库**：交给它一个课题，它会深入研究写成 Markdown 报告；在课题对话里追问、修改，之后可刷新；所有报告都可被 Agent 搜索。
 - **记忆与技能**，**中文 / English 界面**。
 
 ### 安全设计

@@ -21,6 +21,7 @@ import httpx
 
 from app.common.util import dumps, new_id, now_ts, truncate
 from app.runtime import attachments as AT
+from app.runtime import library as LIB
 from app.runtime import outcome, prompts
 from app.runtime.llm import LLM, LLMContextError, LLMError, extract_json, strip_tool_markup
 from app.runtime.store import RStore
@@ -661,6 +662,9 @@ LOCAL_TOOLS = [
     _fn("delegate", "派出子 Agent 独立完成一个调研类子任务（只读工具），返回报告 Spawn a read-only sub-agent for a focused sub-task.",
         {"role": S, "task": S}, ["role", "task"]),
     _fn("load_skill", "加载技能说明 Load a skill's detailed instructions by name.", {"name": S}, ["name"]),
+    _fn("library_list", "列出研究库里的课题 List the research subjects in the user's library (title, status, report file).", {}),
+    _fn("library_search", "在研究库的报告里搜索 Search the reports in the research library (passages with their subject).", {"query": S}, ["query"]),
+    _fn("library_get", "读取研究库里一份完整报告 Read a research subject's whole report by title or slug.", {"subject": S}, ["subject"]),
 ]
 LOCAL_NAMES = {t["function"]["name"] for t in LOCAL_TOOLS}
 # local tools that change something lasting: a golden (test) run stops at them instead of running them
@@ -823,6 +827,18 @@ class Runtime:
             await self.sentinel("POST", "/internal/audit", {"actor": actor, "action": action, "task_id": task_id, **kw}, timeout=10)
         except Exception:
             pass
+
+    def _reindex_report(self, rel_path: str) -> None:
+        """A library report was written: rebuild that subject's search index (cheap: one file)."""
+        m = re.match(r"^/?library/([^/]+)/report\.md$", str(rel_path).replace("\\", "/"))
+        if not m:
+            return
+        sub = next((x for x in self.store.subjects() if x["slug"] == m.group(1)), None)
+        if sub:
+            try:
+                LIB.index_subject(self.store, WORKSPACE, sub)
+            except Exception as e:
+                print(f"[library] reindex {sub['slug']}: {type(e).__name__}: {str(e)[:120]}", flush=True)
 
     async def _retitle(self, cid: str, task_id: str = ""):
         """Give the chat a title that summarises it (the list showed the truncated first question). Re-done after
@@ -1373,6 +1389,14 @@ class Runtime:
                 extra = (f"\n## Scheduled run\nThis task is an automatic run of {kind} 「{sch['name']}」. The user is not watching. "
                          f"State saved by previous runs: {dumps(st)}. Use schedule_state_set to save what you observed; "
                          f"call notify_user only if something the user cares about happened.")
+        subject = self.store.subject_by_conv(t["conv_id"])
+        if subject:
+            extra += LIB.chat_context(subject, LIB.read_report(WORKSPACE, subject["slug"]), agent_lang(s))
+        elif self.store.subjects():
+            hits = self.store.library_search(t["goal"], 3)
+            if hits:
+                extra += LIB.hits_context(hits, agent_lang(s))
+                await self.event(task_id, "context_library", {"hits": [{"title": h["title"], "heading": h["heading"]} for h in hits]})
         conv_files = [x for x in self.store.conv_attachments(t["conv_id"])]
         if conv_files:
             extra += ("\n## Files the user attached in this conversation\n" + "\n".join(
@@ -1703,7 +1727,14 @@ class Runtime:
             await self.event(task_id, "final", {"text": truncate(final, 4000)})
             self.store.add_msg(t["conv_id"], "assistant", final, task_id)
             await self.publish({"kind": "conv_update", "conv_id": t["conv_id"]})
-            asyncio.create_task(self._retitle(t["conv_id"], task_id))
+            subject = self.store.subject_by_conv(t["conv_id"])
+            if subject:
+                n = LIB.index_subject(self.store, WORKSPACE, subject)
+                self.store.update_subject(subject["id"], last_task=task_id, runs=int(subject.get("runs") or 0) + 1,
+                                          error="" if n else "the task finished without writing the report")
+                await self.publish({"kind": "library_update", "subject_id": subject["id"]})
+            else:
+                asyncio.create_task(self._retitle(t["conv_id"], task_id))
             if timed_out and not gave_up and steps < max_steps:
                 await self._warn_unattended(t, (f"超过 {max_minutes:.0f} 分钟上限，按已有信息作答",
                                                 f"hit the {max_minutes:.0f}-minute limit"), final)
@@ -2886,6 +2917,7 @@ class Runtime:
             os.makedirs(os.path.dirname(p), exist_ok=True)
             with open(p, "a" if a.get("append") else "w", encoding="utf-8") as f:
                 f.write(str(a.get("content", "")))
+            self._reindex_report(a["path"])
             # 2026-10-02 R8-20 ("a 5000-character story"): the model guessed lengths from bytes and rewrote the whole file
             # again and again; give it the real length, and tell it to append instead of rewriting
             try:
@@ -2975,6 +3007,24 @@ class Runtime:
                     if len(hits) > 60:
                         break
             return "\n".join(hits[:60]) or "没有找到 no matches"
+        if name == "library_list":
+            subs = self.store.subjects()
+            if not subs:
+                return "研究库是空的 the library is empty (the user creates subjects on the Memory page)"
+            return "\n".join(f"- {x['title']} [{x['slug']}] — {x['status']}, {x['chars']} chars, report: {LIB.report_path(x['slug'])}" for x in subs)
+        if name == "library_search":
+            hits = self.store.library_search(str(a.get("query", "")), 8)
+            if not hits:
+                return "研究库里没有相关内容 nothing in the library matches"
+            return "\n\n".join(f"[{h['title']}] {h['heading']}\n{truncate(h['text'], 900)}" for h in hits)
+        if name == "library_get":
+            want = str(a.get("subject", "")).strip().lower()
+            sub = next((x for x in self.store.subjects() if want in (x["slug"].lower(), x["title"].lower())), None) or \
+                next((x for x in self.store.subjects() if want and want in x["title"].lower()), None)
+            if not sub:
+                return "ERROR: 没有这个课题 unknown subject. Known: " + ", ".join(x["title"] for x in self.store.subjects())
+            txt = LIB.read_report(WORKSPACE, sub["slug"])
+            return truncate(txt, 60_000) if txt else "（报告还是空的 the report is empty）"
         if name == "memory_search":
             rows = self.store.search_facts(str(a.get("query", "")), 15, tier=None)
             eps = [e for e in self.store.episodes(200) if any(w in e["summary"] for w in str(a.get("query", "")).split() if len(w) > 1)][:5]

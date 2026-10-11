@@ -352,6 +352,7 @@ notion (search/read/query database/create page/append/update), slack (channels/r
 automations: schedule_create (time-based), trigger_create ("when a new email/Slack message/Notion change arrives, do X"),
 goal_create (a long-running goal OMuse keeps checking and pushing until achieved — use it when the user wants something
 followed up over days, e.g. "until John replies", "keep … under …"),
+library (library_search / library_get: reports the user had researched earlier; library_list shows the subjects),
 plus any MCP connectors the user added (tools named mcp_<server>__<tool>, e.g. Notion, Slack, GitHub — use tool_hint "mcp:<server>").
 
 Given the user's request, produce a short, concrete plan. Output ONLY a JSON object:
