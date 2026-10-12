@@ -16,6 +16,10 @@ RUN pip install --no-cache-dir --break-system-packages -r requirements.txt -r re
 COPY app ./app
 COPY deploy/docker ./deploy/docker
 
+# Release builds pass the git tag (e.g. locius-v0.3.1); the app shows it as v0.3.1. Empty = version from the source.
+ARG OMUSE_VERSION=
+ENV OMUSE_VERSION=$OMUSE_VERSION
+
 # all state (vault, audit log, memory, workspace files, browser profile) lives in one volume
 RUN mkdir -p /omuse && chown pwuser:pwuser /omuse
 VOLUME /omuse

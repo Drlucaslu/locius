@@ -62,10 +62,13 @@ jobs:
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "org.opencontainers.image.version=$VERSION" \
+            --build-arg "OMUSE_VERSION=$VERSION" \
             --tag "$IMAGE_REPOSITORY:$VERSION" \
             --load .
 
       - name: Smoke test image before publishing
+        env:
+          OMUSE_VERSION: ${{ env.VERSION }}
         run: bash tests/docker_image_smoke.sh "$IMAGE_REPOSITORY:$VERSION"
 
       - name: Log in to GHCR

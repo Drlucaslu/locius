@@ -4,6 +4,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -13,6 +14,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 VERSION = "0.2.76"
+
+
+def release_version(tag: str) -> str:
+    """Version string shown in the app for a release tag: "locius-v0.3.1", "home-v0.3.1" or "v0.3.1" -> "0.3.1".
+    Anything that is not a `<product>-v<version>` style tag is returned trimmed, so plain versions pass through."""
+    t = (tag or "").strip()
+    m = re.match(r"^(?:[A-Za-z0-9_.]+-)?v(\d.*)$", t)
+    return m.group(1) if m else t
+
+
+# Release images bake the git tag in at build time (OMUSE_VERSION build arg, see Dockerfile*); the literal above is
+# the fallback for source checkouts and untagged builds.
+VERSION = release_version(os.environ.get("OMUSE_VERSION", "")) or VERSION
 
 
 def now_ts() -> float:

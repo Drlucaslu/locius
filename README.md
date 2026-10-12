@@ -177,6 +177,13 @@ docker build --platform linux/amd64 -f Dockerfile.fly -t locius:local .
 bash tests/docker_image_smoke.sh locius:local
 ```
 
+The version shown in the app (left bar, `/sentinel/api/health`) comes from the
+release tag: the workflow passes the tag as the `OMUSE_VERSION` build argument and
+`locius-v0.3.1` is shown as `v0.3.1`. The smoke test checks this when `OMUSE_VERSION`
+is set, e.g. `OMUSE_VERSION=locius-v0.3.1 bash tests/docker_image_smoke.sh locius:local`
+after `docker build --build-arg OMUSE_VERSION=locius-v0.3.1 ...`. Builds without the
+argument show the version from the source.
+
 On an Apple Silicon Mac, `--platform linux/arm64` builds a native test image;
 the release workflow always builds AMD64 for Fly. The smoke test verifies all
 three services, login enforcement, unprivileged startup with a root-owned volume,
