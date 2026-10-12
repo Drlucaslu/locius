@@ -3086,3 +3086,58 @@ def test_release_version_from_tag():
     env["OMUSE_VERSION"] = ""
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True).stdout.strip()
     assert out and out != "9.8.7" and not out.startswith("v")
+
+
+# ---------------------------------------------------------------- static assets: no CDN, stamped immutable URLs, pre-gzipped
+def test_page_shell_loads_nothing_off_site():
+    """The page must render from our own server only: a slow or blocked third party would leave it blank."""
+    import re
+    html = open("app/web/index.html", encoding="utf-8").read()
+    for m in re.finditer(r'<(?:link|script)\b[^>]*\b(?:href|src)="([^"]+)"', html):
+        url = m.group(1)
+        assert url.startswith(("static/", "data:")), url
+    css = open("app/web/app.css", encoding="utf-8").read()
+    assert "@import" not in css and "url(http" not in css and "//fonts." not in css
+
+
+def test_assets_stamp_cache_rules_gzip_and_reload(tmp_path):
+    from starlette.requests import Request
+    from app.sentinel.assets import Assets, IMMUTABLE, REVALIDATE
+
+    (tmp_path / "app.js").write_text("console.log('x');" * 200)
+    (tmp_path / "pic.png").write_bytes(b"\x89PNG" + bytes(300))
+    a = Assets(str(tmp_path))
+    v = a.version()
+    assert len(v) == 12
+    html = a.stamp('<link rel="stylesheet" href="static/app.css"><script src="static/app.js"></script>')
+    assert html == f'<link rel="stylesheet" href="static/app.css?v={v}"><script src="static/app.js?v={v}"></script>'
+
+    def req(path, query="", **headers):
+        hs = [(k.lower().replace("_", "-").encode(), val.encode()) for k, val in headers.items()]
+        return Request({"type": "http", "method": "GET", "path": path, "query_string": query.encode(), "headers": hs})
+
+    # unstamped: identity body, revalidate every time, ETag → 304
+    r = a.response("app.js", req("/static/app.js"))
+    assert r.status_code == 200 and r.headers["cache-control"] == REVALIDATE and r.media_type == "text/javascript; charset=utf-8"
+    assert r.headers["vary"] == "Accept-Encoding" and "content-encoding" not in r.headers
+    etag = r.headers["etag"]
+    assert a.response("app.js", req("/static/app.js", if_none_match=etag)).status_code == 304
+    # stamped with the current version: immutable for a year; a stale stamp is not
+    assert a.response("app.js", req("/static/app.js", f"v={v}")).headers["cache-control"] == IMMUTABLE
+    assert a.response("app.js", req("/static/app.js", "v=deadbeef0000")).headers["cache-control"] == REVALIDATE
+    # gzip when accepted: smaller, its own ETag, and the plain ETag still validates
+    r = a.response("app.js", req("/static/app.js", accept_encoding="gzip, deflate, br"))
+    assert r.headers["content-encoding"] == "gzip" and r.headers["etag"].endswith('-gz"') and len(r.body) * 3 < 200 * 17
+    assert a.response("app.js", req("/static/app.js", accept_encoding="gzip", if_none_match=etag)).status_code == 304
+    # binaries: never compressed, no Vary; unknown and traversal: 404
+    r = a.response("pic.png", req("/static/pic.png", accept_encoding="gzip"))
+    assert r.headers["content-type"] == "image/png" and "content-encoding" not in r.headers and "vary" not in r.headers
+    assert a.response("nope.js", req("/static/nope.js")).status_code == 404
+    assert a.response("../test_units.py", req("/static/../test_units.py")).status_code == 404
+    # a changed file on disk (hot patch) changes the version and the served bytes
+    import os, time
+    (tmp_path / "app.js").write_text("console.log('y');")
+    os.utime(tmp_path / "app.js", ns=(time.time_ns(), time.time_ns() + 10_000_000))
+    v2 = a.version()
+    assert v2 != v and a.get("app.js").body == b"console.log('y');"
+    assert a.response("app.js", req("/static/app.js", f"v={v}")).headers["cache-control"] == REVALIDATE

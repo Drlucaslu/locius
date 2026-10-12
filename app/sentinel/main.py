@@ -18,7 +18,6 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 
 from app.common.util import VERSION, token_ok, truncate
 from app.sentinel import actions, guard, ledger, mailboxes, suggest, mailproviders, mcp_hub, watchers
@@ -26,6 +25,7 @@ from app.sentinel.actions import ActionError
 from app.sentinel.catalog import TOOLS, llm_schemas
 from app.sentinel.policy import ALLOW, ASK, DENY, PER_USE_TOOLS, decide
 from app.sentinel.store import Store
+from app.sentinel.assets import Assets
 from app.sentinel.telegram_bot import TelegramBot
 from app.sentinel import phone
 from app.sentinel import dialmcp, mcp_oauth
@@ -1996,17 +1996,6 @@ async def proxy(path: str, request: Request):
     return StreamingResponse(gen(), status_code=r.status_code, headers=resp_headers)
 
 
-def _asset_ver() -> str:
-    """Version tag for cache-busting: changes whenever app.js/app.css change (e.g. after a hot patch)."""
-    m = 0.0
-    for f in ("app.js", "app.css", "i18n.js", "i18n_tw.js"):
-        try:
-            m = max(m, os.path.getmtime(os.path.join(WEB_DIR, f)))
-        except OSError:
-            pass
-    return f"{VERSION}.{int(m)}"
-
-
 @app.get("/")
 async def index(request: Request):
     host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
@@ -2017,22 +2006,16 @@ async def index(request: Request):
             store.kv_set("public_base", base)
     with open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8") as fh:
         html = fh.read()
-    v = _asset_ver()
-    for f in ("app.js", "app.css", "i18n.js", "i18n_tw.js"):
-        html = html.replace(f'static/{f}"', f'static/{f}?v={v}"')
-    return Response(html, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
+    return Response(ASSETS.stamp(html), media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
 
 
-@app.middleware("http")
-async def _static_revalidate(request: Request, call_next):
-    resp = await call_next(request)
-    if request.url.path.startswith("/static/"):
-        resp.headers["Cache-Control"] = "no-cache"  # always revalidate (cheap 304 via ETag)
-    return resp
+# The UI's files, from memory: stamped URLs immutable, others revalidated, text pre-gzipped (see assets.py).
+ASSETS = Assets(WEB_DIR)
 
 
-if os.path.isdir(WEB_DIR):
-    app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+@app.get("/static/{name:path}")
+async def static_file(name: str, request: Request):
+    return ASSETS.response(name, request)
 
 
 @app.exception_handler(HTTPException)
