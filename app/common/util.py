@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-VERSION = "0.2.76"
+VERSION = "0.3.1"
 
 
 def release_version(tag: str) -> str:
