@@ -3065,3 +3065,24 @@ def test_library_slug_chunks_and_search(tmp_path):
     assert st.library_search("docker", 5) == [] and st.subject(sub["id"]) is None
     assert "RESEARCH SUBJECT: Home NAS 2026" in LIB.research_goal(sub2, False, "en") and "REFRESH" in LIB.research_goal(sub2, True, "en")
     assert "Current report" in LIB.chat_context(sub2, "# x", "en") and "当前报告" in LIB.chat_context(sub2, "", "zh")
+
+
+# ---------------------------------------------------------------- version from release tag
+def test_release_version_from_tag():
+    import subprocess
+    import sys
+    from app.common.util import release_version
+
+    assert release_version("locius-v0.3.1") == "0.3.1"
+    assert release_version("home-v0.3.1") == "0.3.1"
+    assert release_version("v0.3.1") == "0.3.1"
+    assert release_version("0.3.1") == "0.3.1"
+    assert release_version(" locius-v0.4.0-rc1 ") == "0.4.0-rc1"
+    assert release_version("") == ""
+    # the build arg wins over the literal in the source; an empty build arg (local docker build) keeps the literal
+    code = "from app.common.util import VERSION; print(VERSION)"
+    env = {**os.environ, "PYTHONPATH": os.getcwd(), "OMUSE_VERSION": "locius-v9.8.7"}
+    assert subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True).stdout.strip() == "9.8.7"
+    env["OMUSE_VERSION"] = ""
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True).stdout.strip()
+    assert out and out != "9.8.7" and not out.startswith("v")

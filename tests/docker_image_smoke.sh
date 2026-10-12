@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Verify the actual Fly entrypoint, auth, Chromium and persistent volume without live credentials.
-# Usage: bash tests/docker_image_smoke.sh <local-image>
+# Usage: [OMUSE_VERSION=<tag>] bash tests/docker_image_smoke.sh <local-image>
+# With OMUSE_VERSION set to the tag the image was built with, also checks that the app reports that version.
 set -euo pipefail
 
 image=${1:?Usage: bash tests/docker_image_smoke.sh <local-image>}
@@ -51,6 +52,12 @@ start
 port=$(docker port "$container" 8080/tcp)
 test "$(curl -s -o /dev/null -w '%{http_code}' "http://$port/")" = 401
 echo 'PASS published port requires authentication'
+if [ -n "${OMUSE_VERSION:-}" ]; then
+  expected=${OMUSE_VERSION#*-v}; expected=${expected#v}
+  got=$(curl -fsS -u "omuse:$OMUSE_PASSWORD" "http://$port/sentinel/api/health" | jq -er .version)
+  test "$got" = "$expected"
+  echo "PASS app reports version $got for tag $OMUSE_VERSION"
+fi
 docker exec -i "$container" python3 - <<'PY'
 import hashlib
 import os
