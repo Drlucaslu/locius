@@ -20,6 +20,15 @@ literal, the tagged commit and the image all agree:
 
 Do not move or re-publish an existing release tag; use a new version instead.
 
+## Web UI assets
+
+The page shell depends on nothing but this server: no CDN `<link>` or `<script>`,
+no web fonts; `marked` and `DOMPurify` are vendored in `app/web/`. The sentinel
+serves `app/web` from memory (`app/sentinel/assets.py`): `index.html` stamps every
+asset URL with `?v=<digest>`, a stamped URL is immutable for a year, anything else
+is `no-cache` with an ETag, and text assets are gzip-compressed once at load. A
+unit test fails on an off-site asset; `tests/assets_e2e.py` checks the headers.
+
 ## Pull requests
 
 Open a PR and report it; merge only when the user explicitly says to merge
