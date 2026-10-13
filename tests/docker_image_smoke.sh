@@ -75,6 +75,23 @@ with httpx.Client(base_url=b, auth=('omuse', os.environ['OMUSE_PASSWORD']), time
     assert c.put('/api/settings', json={'model_override': True, 'model_base_url': 'http://127.0.0.1:9/v1', 'model_api_key': 'smoke-key',
                                         'model_name': 'smoke-persisted'}, headers={'X-Persona-UI': '1'}).status_code == 200
 print('PASS UI, runtime proxy, authentication, subscription defaults and internal token guard')
+# browsers: the login page and a cookie session instead of a Basic challenge
+nav = {'Sec-Fetch-Mode': 'navigate'}
+with httpx.Client(base_url=b, timeout=30) as c:
+    r = c.get('/', headers=nav)
+    assert r.status_code == 302 and r.headers['location'] == '/login', (r.status_code, r.headers)
+    assert c.get('/api/settings', headers={'Sec-Fetch-Mode': 'cors'}).status_code == 401
+    assert 'www-authenticate' not in c.get('/api/settings', headers={'Sec-Fetch-Mode': 'cors'}).headers
+    assert 'name="password"' in c.get('/login', headers=nav).text
+    r = c.post('/login', data={'user': 'omuse', 'password': 'wrong', 'next': '/'}, headers=nav)
+    assert r.status_code == 401 and 'omuse_session' not in c.cookies
+    r = c.post('/login', data={'user': 'omuse', 'password': os.environ['OMUSE_PASSWORD'], 'next': '/'}, headers=nav)
+    assert r.status_code == 303 and r.headers['location'] == '/' and c.cookies.get('omuse_session'), (r.status_code, r.headers)
+    assert c.get('/', headers=nav).status_code == 200 and c.get('/api/settings', headers={'Sec-Fetch-Mode': 'cors'}).status_code == 200
+    Path('/omuse/workspace/smoke-cookie').write_text(c.cookies.get('omuse_session'))
+    r = c.get('/logout', headers=nav)
+    assert r.status_code == 303 and c.get('/', headers=nav).status_code == 302
+print('PASS login page, cookie session and sign out')
 
 # A root-owned Fly-style volume must be writable by the unprivileged service user.
 key = Path('/omuse/sentinel/vault.key')
@@ -101,8 +118,24 @@ with sync_playwright() as p:
     page.set_content('<h1>Image smoke test</h1>')
     assert page.locator('h1').inner_text() == 'Image smoke test'
     assert page.pdf().startswith(b'%PDF')
+    # a real browser: no native password dialog; the login page, then the app; a reload keeps the session; sign out
+    page = browser.new_page()
+    page.goto('http://127.0.0.1:8080/')
+    page.wait_for_url('http://127.0.0.1:8080/login')
+    page.fill('input[name=user]', 'omuse')
+    page.fill('input[name=password]', os.environ['OMUSE_PASSWORD'])
+    page.click('button[type=submit]')
+    page.wait_for_url('http://127.0.0.1:8080/')
+    page.wait_for_function("document.querySelector('#modelChip').textContent.includes('smoke')")
+    page.reload()
+    page.wait_for_function("document.querySelector('#modelChip').textContent.includes('smoke')")
+    assert page.url == 'http://127.0.0.1:8080/'
+    page.goto('http://127.0.0.1:8080/logout')
+    page.wait_for_url('http://127.0.0.1:8080/login')
+    page.goto('http://127.0.0.1:8080/')
+    page.wait_for_url('http://127.0.0.1:8080/login')
     browser.close()
-print('PASS Chromium renders a PDF')
+print('PASS Chromium renders a PDF; browser login, session across reloads and sign out')
 PY
 
 docker stop --time 20 "$container" >/dev/null
@@ -119,8 +152,11 @@ with httpx.Client(base_url='http://127.0.0.1:8080', auth=('omuse', os.environ['O
     s = c.get('/api/settings').json()['settings']
     assert s['model_override'] and s['model_name'] == 'smoke-persisted' and s['model_api_key_set'] and 'model_api_key' not in s, s
     assert c.put('/api/settings', json={'model_override': False}, headers={'X-Persona-UI': '1'}).json()['settings']['model_name'] == 'smoke'
+# the cookie session from before the restart is still valid (the signing key is on the volume)
+r = httpx.get('http://127.0.0.1:8080/', headers={'Sec-Fetch-Mode': 'navigate'}, cookies={'omuse_session': Path('/omuse/workspace/smoke-cookie').read_text()}, timeout=30)
+assert r.status_code == 200, r.status_code
 key = Path('/omuse/sentinel/vault.key')
 assert hashlib.sha256(key.read_bytes()).hexdigest() == Path('/omuse/workspace/smoke-vault-sha256').read_text()
-print('PASS settings, workspace and vault key survive container replacement')
+print('PASS settings, workspace, vault key and the login session survive container replacement')
 PY
 echo 'ALL IMAGE SMOKE CHECKS PASS'

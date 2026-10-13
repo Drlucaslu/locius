@@ -874,7 +874,6 @@ window.OMUSE_EN = {
 "🔑 你还在用初始密码。请到「设置」里改成自己的密码。": "🔑 You are still using the initial password. Set your own in Settings.",
 "去修改 Change": "Change",
 "🔑 登录密码 Password": "🔑 Password",
-"登录名 {0}。改完后浏览器会要求你用新密码重新登录。": "Login name {0}. After the change the browser asks you to sign in again with the new password.",
 "你还在用初始密码，请尽快修改。": "You are still using the initial password; please change it.",
 "当前密码": "Current password",
 "新密码（至少 {0} 个字符）": "New password (at least {0} characters)",
@@ -959,5 +958,7 @@ window.OMUSE_EN = {
 "请填写接口地址（http:// 或 https:// 开头）": "Enter the endpoint URL (starting with http:// or https://)",
 "请填写 API key": "Enter the API key",
 "请填写执行任务的 LLM 模型名": "Enter the LLM model name",
-"自己的模型 Own model": "Own model"
+"自己的模型 Own model": "Own model",
+"登录名 {0}。改完后所有浏览器都要用新密码重新登录。": "User {0}. After a change, every browser has to sign in again with the new password.",
+"退出登录 Sign out": "Sign out"
 };

@@ -110,6 +110,10 @@ async function call(url, opts = {}) {
   const r = await fetch(url, o);
   let data = null;
   try { data = await r.json(); } catch (e) { data = null; }
+  if (r.status === 401 && data && data.detail === 'login required') {   // the Docker gate: the session ended, sign in again
+    location.href = 'login?next=' + encodeURIComponent(location.pathname + location.search + location.hash);
+    await new Promise(() => {});   // the page is leaving: nothing to report
+  }
   if (!r.ok) throw new Error((data && data.detail) || `HTTP ${r.status}`);
   return data;
 }
@@ -2303,7 +2307,7 @@ function passwordCard(info) {
   const again = h('input', { type: 'password', autocomplete: 'new-password' });
   const field = (label, i) => h('label', { class: 'field' }, h('span', null, label), i);
   return h('div', { class: 'card stack', id: 'password', style: 'margin-top:16px' }, h('h3', null, T('🔑 登录密码 Password')),
-    h('p', { class: 'sub' }, Tf("登录名 {0}。改完后浏览器会要求你用新密码重新登录。", info.user || 'omuse')),
+    h('p', { class: 'sub' }, Tf("登录名 {0}。改完后所有浏览器都要用新密码重新登录。", info.user || 'omuse')),
     info.default ? h('p', { class: 'small', id: 'pwDefault', style: 'color:var(--warn)' }, T('你还在用初始密码，请尽快修改。')) : null,
     field(T('当前密码'), cur), field(Tf("新密码（至少 {0} 个字符）", info.min_length || 8), nw), field(T('再输一次新密码'), again),
     h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: safe(async () => {
@@ -2311,7 +2315,8 @@ function passwordCard(info) {
       await sapi('password', { method: 'POST', body: { current: cur.value, new: nw.value } });
       S.passwordDefault = false; cur.value = nw.value = again.value = '';
       toast(T('密码已修改，请用新密码重新登录')); setTimeout(() => location.reload(), 1500);
-    }) }, T('修改密码 Change password'))));
+    }) }, T('修改密码 Change password')),
+    h('button', { class: 'btn', onclick: () => { location.href = 'logout'; } }, T('退出登录 Sign out'))));
 }
 
 function subscriptionCard(sub) {
