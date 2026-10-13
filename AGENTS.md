@@ -29,6 +29,19 @@ asset URL with `?v=<digest>`, a stamped URL is immutable for a year, anything el
 is `no-cache` with an ETag, and text assets are gzip-compressed once at load. A
 unit test fails on an off-site asset; `tests/assets_e2e.py` checks the headers.
 
+## Model settings
+
+The system's endpoint, key and model names come from the environment
+(`OMUSE_MODEL_URL`, `OMUSE_MODEL_API_KEY`, `OMUSE_MODEL`, ...). A user can switch
+`model_override` on in Settings → Models and use their own endpoint, key and
+models (`app/runtime/store.py`, `effective_model`): the saved `model_*` values
+and `model_api_key` count only while the toggle is on, and the endpoint, key and
+LLM name are required then. With it off they are ignored, never mixed with the
+system's. The API never returns the key, only `model_api_key_set`, and the audit
+log gets `(set)`. A test that changes the model must send `model_override: true`
+with those three fields and switch it off afterwards (`tests/models_e2e.py`,
+`tests/models_ui.py`).
+
 ## Pull requests
 
 Open a PR and report it; merge only when the user explicitly says to merge

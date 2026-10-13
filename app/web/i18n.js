@@ -946,5 +946,18 @@ window.OMUSE_EN = {
 "图像 Image": "Image",
 "同 LLM": "same as the LLM",
 "测试所有模型 Test models": "Test models",
-"LLM 参数": "LLM parameters"
+"LLM 参数": "LLM parameters",
+"系统默认：LLM {0}": "System default: LLM {0}",
+" · 规划 {0}": " · planner {0}",
+" · 视觉 {0}": " · vision {0}",
+" · 语音转文字 {0}": " · speech-to-text {0}",
+" · 图像 {0}": " · image {0}",
+"使用自己的模型 Use my own model": "Use my own model",
+"打开后，下面填的接口、API key 和模型会代替系统默认，三项必填。关掉就回到系统默认，下面的值全部不再使用（保留着，再打开时还在）。": "On: the endpoint, API key and models below replace the system defaults; those three are required. Off: back to the system defaults, and nothing below is used (it is kept for the next time you switch on).",
+"必填": "Required",
+"已保存；留空=不改": "Saved; leave blank to keep it",
+"请填写接口地址（http:// 或 https:// 开头）": "Enter the endpoint URL (starting with http:// or https://)",
+"请填写 API key": "Enter the API key",
+"请填写执行任务的 LLM 模型名": "Enter the LLM model name",
+"自己的模型 Own model": "Own model"
 };

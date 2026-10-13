@@ -66,7 +66,7 @@ st = health_check()
 check("all components healthy at start", all(v["ok"] for v in st["components"].values()) and
       {"model", "browser", "sentinel"} <= set(st["components"]), st)
 n0 = len(tg_texts())
-settings(model_name="missing-model")
+settings(model_override=True, model_base_url=orig["model_base_url"], model_api_key="k", model_name="missing-model")
 health_check()
 check("one failed check is not an alert yet (router restarts happen)", not [t for t in tg_texts()[n0:] if "出问题" in t], tg_texts()[n0:])
 health_check()
@@ -79,20 +79,20 @@ check("status page shows the model down", st["components"]["model"]["down"] is T
 # a task still works: the runtime falls back to a chat model (never a TTS one) for a few minutes
 tid = chat("你好")
 check("task still completes on a stand-in chat model", wait_task(tid)["status"] == "COMPLETED", task(tid).get("error"))
-settings(model_name=orig["model_name"])
+settings(model_override=False)   # back to the system model
 health_check()
 check("recovery message sent", wait_for(lambda: any("模型服务已恢复" in t for t in tg_texts()[n0:]), 10), tg_texts()[n0:])
 
 # ---------------------------------------------------------------- 2 failure streak
 n1 = len(tg_texts())
-settings(model_base_url="http://127.0.0.1:9/v1")      # nothing listens there
+settings(model_override=True, model_base_url="http://127.0.0.1:9/v1", model_api_key="k", model_name=orig["model_name"])   # nothing listens there
 tids = [chat(f"你好 {i}") for i in range(3)]
 for t in tids:
     wait_task(t, 180)
 check("3 tasks failed (model unreachable)", all(task(t)["status"] == "FAILED" for t in tids), [task(t)["error"] for t in tids])
 check("failure streak -> Telegram alert about task runs",
       wait_for(lambda: any("任务执行出问题" in t and "模型" in t for t in tg_texts()[n1:]), 15), tg_texts()[n1:])
-settings(model_base_url=orig["model_base_url"])
+settings(model_override=False)
 tid = chat("你好 again")
 check("next task completes", wait_task(tid)["status"] == "COMPLETED")
 check("streak alert cleared with a recovery message", wait_for(lambda: any("任务执行已恢复" in t for t in tg_texts()[n1:]), 15),

@@ -71,7 +71,9 @@ with httpx.Client(base_url=b, auth=('omuse', os.environ['OMUSE_PASSWORD']), time
     assert c.get('/sentinel/api/subscription').json() == {'enabled': False}
     assert c.get('/internal/browser_state').status_code == 401
     assert httpx.get(b + '/', auth=('omuse', 'wrong'), timeout=10).status_code == 401
-    assert c.put('/api/settings', json={'model_name': 'smoke-persisted'}, headers={'X-Persona-UI': '1'}).status_code == 200
+    assert c.put('/api/settings', json={'model_override': True, 'model_name': 'smoke-persisted'}, headers={'X-Persona-UI': '1'}).status_code == 400   # endpoint and key required
+    assert c.put('/api/settings', json={'model_override': True, 'model_base_url': 'http://127.0.0.1:9/v1', 'model_api_key': 'smoke-key',
+                                        'model_name': 'smoke-persisted'}, headers={'X-Persona-UI': '1'}).status_code == 200
 print('PASS UI, runtime proxy, authentication, subscription defaults and internal token guard')
 
 # A root-owned Fly-style volume must be writable by the unprivileged service user.
@@ -114,7 +116,9 @@ from pathlib import Path
 import httpx
 
 with httpx.Client(base_url='http://127.0.0.1:8080', auth=('omuse', os.environ['OMUSE_PASSWORD']), timeout=30) as c:
-    assert c.get('/api/settings').json()['settings']['model_name'] == 'smoke-persisted'
+    s = c.get('/api/settings').json()['settings']
+    assert s['model_override'] and s['model_name'] == 'smoke-persisted' and s['model_api_key_set'] and 'model_api_key' not in s, s
+    assert c.put('/api/settings', json={'model_override': False}, headers={'X-Persona-UI': '1'}).json()['settings']['model_name'] == 'smoke'
 key = Path('/omuse/sentinel/vault.key')
 assert hashlib.sha256(key.read_bytes()).hexdigest() == Path('/omuse/workspace/smoke-vault-sha256').read_text()
 print('PASS settings, workspace and vault key survive container replacement')

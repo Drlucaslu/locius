@@ -31,10 +31,14 @@ def strip_tool_markup(text: str) -> str:
     return _ANY_TOOLCALL.sub("", text or "").strip()
 
 
-def auth_headers() -> dict:
-    """Bearer key for hosted OpenAI-compatible APIs (OMUSE_MODEL_API_KEY). Read from the environment only, so it never
-    shows up in Settings or the audit log; the Olares router needs none."""
-    key = (os.environ.get("OMUSE_MODEL_API_KEY") or os.environ.get("PERSONA_MODEL_API_KEY") or "").strip()
+def auth_headers(settings: dict | None = None) -> dict:
+    """Bearer key for the model endpoint in force: the user's own when Settings → Models overrides the system's, else
+    OMUSE_MODEL_API_KEY from the environment (store.effective_model decides; the Olares router needs none). Without
+    settings, the system's key."""
+    if settings is None:
+        key = (os.environ.get("OMUSE_MODEL_API_KEY") or os.environ.get("PERSONA_MODEL_API_KEY") or "").strip()
+    else:
+        key = str(settings.get("model_api_key") or "").strip()
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
@@ -192,7 +196,7 @@ class LLM:
     async def first_model(self, base: str, exclude: str = "") -> str:
         try:
             async with httpx.AsyncClient(timeout=15) as c:
-                r = await c.get(f"{base}/models", headers=auth_headers())
+                r = await c.get(f"{base}/models", headers=auth_headers(self.get_settings()))
             models = [m for m in (r.json().get("data") or []) if isinstance(m, dict) and m.get("id")]
         except Exception:
             return ""
@@ -206,7 +210,7 @@ class LLM:
         base = str(s["model_base_url"]).rstrip("/")
         try:
             async with httpx.AsyncClient(timeout=15) as c:
-                r = await c.get(f"{base}/models", headers=auth_headers())
+                r = await c.get(f"{base}/models", headers=auth_headers(s))
             ids = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
         except Exception:
             return ""
@@ -229,7 +233,7 @@ class LLM:
                 try:
                     async with httpx.AsyncClient(timeout=httpx.Timeout(float(s.get("llm_timeout") or 600), connect=15)) as c:
                         r = await c.post(f"{base}/audio/transcriptions", data={"model": model, "response_format": "json"},
-                                         files={"file": (filename, audio, "audio/wav")}, headers=auth_headers())
+                                         files={"file": (filename, audio, "audio/wav")}, headers=auth_headers(s))
                 except (httpx.TimeoutException, httpx.TransportError) as e:
                     await self._retry(retries, f"{type(e).__name__}: {e}", None, task_id, "stt")
                     continue
@@ -280,7 +284,7 @@ class LLM:
                 t0 = time.time()
                 try:
                     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=15)) as c:
-                        r = await c.post(f"{base}/chat/completions", json=body, headers=auth_headers())
+                        r = await c.post(f"{base}/chat/completions", json=body, headers=auth_headers(s))
                 except (httpx.TimeoutException, httpx.TransportError) as e:
                     await self._retry(retries, f"{type(e).__name__}: {e}", None, task_id, purpose)
                     continue

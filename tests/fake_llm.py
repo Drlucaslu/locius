@@ -39,10 +39,19 @@ def models():
     return {"data": [{"id": "fake"}]}
 
 
+AUTH = []   # Authorization header of each chat call ("" = none), for models_e2e.py
+
+
+@app.get("/last_auth")
+def last_auth():
+    return {"authorization": AUTH[-1] if AUTH else None, "calls": len(AUTH)}
+
+
 @app.post("/v1/chat/completions")
 async def chat(req: Request):
     b = await req.json()
     CALLS.append(b)
+    AUTH.append(req.headers.get("authorization") or "")
     if b.get("model") == "missing-model":
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": {"message": "model 'missing-model' not found"}}, status_code=404)

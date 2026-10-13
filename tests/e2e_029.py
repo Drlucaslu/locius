@@ -79,11 +79,12 @@ check("going to checkout is navigation (0.2.65); placing the order still needs a
       not guard.click_is_risky("link", "Proceed to checkout", "") and guard.click_is_risky("button", "Place order", "submit"))
 
 # ---------------------------------------------------------------- the configured vision model can't take images
-c.put(B + "/api/settings", json={"vision_model": "text-only"}, headers=H)
+sys_url = c.get(B + "/api/settings", headers=H).json()["settings"]["model_base_url"]
+c.put(B + "/api/settings", json={"model_override": True, "model_base_url": sys_url, "model_api_key": "k", "model_name": "fake", "vision_model": "text-only"}, headers=H)
 t = run("SHOPCART open Amazon and add an iPhone case")
 looks = results(t, "browser_look")
 check("without a vision model browser_look fails cleanly with a hint", looks and not looks[0]["ok"] and "Vision model" in looks[0]["preview"], looks[:1])
-c.put(B + "/api/settings", json={"vision_model": "", "language": "zh"}, headers=H)
+c.put(B + "/api/settings", json={"model_override": False, "language": "zh"}, headers=H)
 
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

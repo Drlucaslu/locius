@@ -90,10 +90,13 @@ def with_style(prompt: str, style: str | None) -> str:
     return f"{prompt.rstrip('. ')}, {suf}"
 
 
-def image_auth_headers() -> dict:
-    """A separate key for a hosted image API (OMUSE_IMAGE_API_KEY), else the model endpoint's key. Env only."""
+def image_auth_headers(settings: dict | None = None) -> dict:
+    """The key for the image endpoint: with the user's own model settings in force, their key (the system's
+    OMUSE_IMAGE_API_KEY must never go to a user's endpoint); otherwise OMUSE_IMAGE_API_KEY, else the model endpoint's key."""
+    if settings and settings.get("model_override"):
+        return auth_headers(settings)
     key = (os.environ.get("OMUSE_IMAGE_API_KEY") or "").strip()
-    return {"Authorization": f"Bearer {key}"} if key else auth_headers()
+    return {"Authorization": f"Bearer {key}"} if key else auth_headers(settings)
 
 
 def pick_image_model(models: list[dict]) -> str:
@@ -147,9 +150,9 @@ def _bad_size(text: str) -> bool:
     return "size" in t or "dimension" in t or "resolution" in t or "width" in t or "height" in t
 
 
-async def list_models(base: str, timeout: float = 15) -> list[dict]:
+async def list_models(base: str, timeout: float = 15, settings: dict | None = None) -> list[dict]:
     async with httpx.AsyncClient(timeout=timeout) as c:
-        r = await c.get(f"{base}/models", headers=image_auth_headers())
+        r = await c.get(f"{base}/models", headers=image_auth_headers(settings))
     if r.status_code >= 400:
         raise ImageError(f"HTTP {r.status_code} from {base}/models")
     data = r.json()
@@ -165,7 +168,7 @@ async def resolve(settings: dict) -> tuple[str, str]:
     if model:
         return base, model
     try:
-        model = pick_image_model(await list_models(base))
+        model = pick_image_model(await list_models(base, settings=settings))
     except Exception as e:
         raise ImageError(f"无法读取模型列表 (could not list models at the endpoint): {str(e)[:120]}")
     if not model:
@@ -216,7 +219,7 @@ async def generate(settings: dict, prompt: str, *, size: str | None = None, aspe
             body["size"] = sz
             for _ in range(len(OPTIONAL_FIELDS) + 1):   # strip fields the server rejects, then retry the same size
                 try:
-                    r = await c.post(f"{base}/images/generations", json=body, headers=image_auth_headers())
+                    r = await c.post(f"{base}/images/generations", json=body, headers=image_auth_headers(settings))
                 except httpx.TimeoutException:
                     raise ImageError("图像生成超时 (image generation timed out) — 稍后再试一次 try once more later")
                 if r.status_code < 400:
@@ -294,7 +297,7 @@ async def edit(settings: dict, images: list[tuple[str, bytes]], prompt: str, *, 
                 if mask:
                     files.append(("mask", ("mask.png", mask, "image/png")))
                 try:
-                    r = await c.post(f"{base}/images/edits", data=data, files=files, headers=image_auth_headers())
+                    r = await c.post(f"{base}/images/edits", data=data, files=files, headers=image_auth_headers(settings))
                 except httpx.TimeoutException:
                     raise ImageError("图像编辑超时 (image edit timed out) — 稍后再试一次 try once more later")
                 if r.status_code < 400:
@@ -345,7 +348,7 @@ async def variation(settings: dict, image: tuple[str, bytes], *, prompt: str = "
     async with httpx.AsyncClient(timeout=tmo) as c:
         try:
             r = await c.post(f"{base}/images/variations", data={"model": mdl, "n": str(n), "size": sizes[0], "response_format": "b64_json"},
-                             files=[("image", (image[0] or "image.png", image[1], _guess_mime(image[0])))], headers=image_auth_headers())
+                             files=[("image", (image[0] or "image.png", image[1], _guess_mime(image[0])))], headers=image_auth_headers(settings))
         except httpx.TimeoutException:
             r = None
         if r is not None and r.status_code < 400:
