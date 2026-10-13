@@ -42,6 +42,18 @@ log gets `(set)`. A test that changes the model must send `model_override: true`
 with those three fields and switch it off afterwards (`tests/models_e2e.py`,
 `tests/models_ui.py`).
 
+## Login gate (Docker / Fly)
+
+`deploy/docker/gate.py` wraps Sentinel for standalone installs. Browsers sign in
+on `/login` and get a signed cookie (`omuse_session`, 180 days, invalid after a
+password change; the key is `$SENTINEL_DATA/session.key` on the volume, so
+sessions survive restarts). Browser navigations without a session are
+redirected to `/login`, browser fetches get `401 {"detail": "login required"}`
+(the web app then goes to `/login`), and non-browser clients (no
+`Sec-Fetch-Mode`) still get the HTTP Basic challenge. The local e2e stack runs
+Sentinel without the gate; the gate is covered by unit tests and
+`tests/docker_image_smoke.sh`.
+
 ## Pull requests
 
 Open a PR and report it; merge only when the user explicitly says to merge

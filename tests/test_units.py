@@ -1466,7 +1466,7 @@ def test_docker_gate_basic_auth():
         await send({"type": "http.response.start", "status": 200, "headers": []})
 
     calls = []
-    gate = BasicAuthGate(inner, lambda u, p: calls.append(u) or (u == "omuse" and p == "pä55"), fail_delay=0)
+    gate = BasicAuthGate(inner, lambda u, p: calls.append(u) or (u == "omuse" and p == "pä55"), fail_delay=0, session_key=b"k" * 32)
 
     def status(path, cred=None, scheme="Basic"):
         sent = []
@@ -1489,6 +1489,85 @@ def test_docker_gate_basic_auth():
     assert status("/api/stream", "omuse:wrong")[0] == 401 and len(calls) == n + 1
     gate.version = lambda: 2                                                    # password changed: cache dropped
     assert status("/api/stream", "omuse:pä55")[0] == 200 and len(calls) == n + 2
+
+
+def test_docker_gate_cookie_login(tmp_path, monkeypatch):
+    """Browsers sign in on /login and get a signed cookie that outlives server restarts (the key is on disk) and the
+    browser dropping the page; it ends with the password change or after SESSION_DAYS. Browsers never get a Basic
+    challenge: navigations are redirected to /login, fetches get a 401 JSON; scripts (no Sec-Fetch-Mode) still get Basic."""
+    import asyncio, time
+    from urllib.parse import urlencode
+    from deploy.docker import gate as G
+
+    async def inner(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"app"})
+
+    monkeypatch.setenv("SENTINEL_DATA", str(tmp_path))
+    ver = {"v": 1}
+    gate = G.BasicAuthGate(inner, lambda u, p: u == "omuse" and p == "secret-1", lambda: ver["v"], fail_delay=0)
+    assert (tmp_path / "session.key").exists() and G.load_session_key() == gate.key     # persisted: restarts keep sessions
+
+    def req(path, method="GET", headers=None, body=b"", scheme="http", query=""):
+        sent = []
+
+        async def send(m):
+            sent.append(m)
+
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+        hs = [(k.encode(), v.encode()) for k, v in (headers or {}).items()]
+        asyncio.run(gate({"type": "http", "path": path, "method": method, "headers": hs, "scheme": scheme, "query_string": query.encode()}, receive, send))
+        st = sent[0]
+        return st["status"], {k.decode(): v.decode() for k, v in st["headers"]}, b"".join(m.get("body", b"") for m in sent[1:])
+
+    nav = {"sec-fetch-mode": "navigate", "accept-language": "zh-CN,zh;q=0.9"}
+    # a browser without a session: navigation -> login page (with the url to come back to), fetch -> 401 json, no dialog
+    st, h, _ = req("/", headers=nav)
+    assert st == 302 and h["location"] == "/login"
+    st, h, _ = req("/tasks", headers=nav, query="a=1")
+    assert st == 302 and h["location"] == "/login?" + urlencode({"next": "/tasks?a=1"})
+    st, h, body = req("/api/stream", headers={"sec-fetch-mode": "cors"})
+    assert st == 401 and "www-authenticate" not in h and b"login required" in body and h["content-type"] == "application/json"
+    st, h, _ = req("/api/stream")                                   # curl / httpx: the Basic challenge as before
+    assert st == 401 and "Basic" in h["www-authenticate"]
+    # the login page
+    st, h, body = req("/login", headers=nav, query="next=/%23settings")
+    assert st == 200 and b'name="password"' in body and b'value="/#settings"' in body and "登录".encode() in body
+    st, h, body = req("/login", headers={"sec-fetch-mode": "navigate", "accept-language": "en-US"})
+    assert st == 200 and b"Sign in" in body and "登录".encode() not in body
+    st, h, body = req("/login", method="POST", headers=nav, body=b"user=omuse&password=wrong&next=/")
+    assert st == 401 and "set-cookie" not in h and "不对".encode() in body
+    st, h, body = req("/login", method="POST", headers=nav, body=b"user=omuse&password=secret-1&next=//evil.example/x")
+    assert st == 303 and h["location"] == "/" and h["set-cookie"].startswith("omuse_session=")     # off-site next ignored
+    ck = h["set-cookie"]
+    assert "HttpOnly" in ck and "SameSite=Lax" in ck and f"Max-Age={180 * 86400}" in ck and "Secure" not in ck
+    st, h, _ = req("/login", method="POST", headers=nav, body=b"user=omuse&password=secret-1&next=/%23settings", scheme="https")
+    assert st == 303 and h["location"] == "/#settings" and "; Secure" in h["set-cookie"]          # behind HTTPS (Fly): Secure
+    cookie = ck.split(";")[0]
+    # the session works for navigations, fetches and the stream; the login page sends a signed-in user on
+    for path, hs in (("/", nav), ("/api/stream", {"sec-fetch-mode": "cors"}), ("/sentinel/api/audit", {})):
+        assert req(path, headers={**hs, "cookie": "x=1; " + cookie})[0] == 200
+    st, h, _ = req("/login", headers={**nav, "cookie": cookie}, query="next=/%23tasks")
+    assert st == 303 and h["location"] == "/#tasks"
+    # a restart: a new gate with the key from disk still accepts it
+    gate2 = G.BasicAuthGate(inner, lambda u, p: False, lambda: ver["v"], fail_delay=0)
+    assert gate2.cookie_valid(cookie.split("=", 1)[1])
+    # forged, expired, or from before a password change: no
+    val = cookie.split("=", 1)[1]
+    assert not gate.cookie_valid(val[:-1] + ("0" if val[-1] != "0" else "1"))
+    assert not gate.cookie_valid("")
+    issued, v, nonce, sig = val.split(".")
+    old = f"{int(time.time()) - 181 * 86400}.{v}.{nonce}"
+    assert not gate.cookie_valid(old + "." + gate._sign(old))
+    ver["v"] = 2
+    assert req("/", headers={**nav, "cookie": cookie})[0] == 302
+    ver["v"] = 1
+    # sign out clears the cookie
+    st, h, _ = req("/logout", headers={**nav, "cookie": cookie})
+    assert st == 303 and h["location"] == "/login" and "Max-Age=0" in h["set-cookie"]
+    # the health check and the runtime's calls stay open; a websocket without a session is closed
+    assert req("/sentinel/api/health", headers=nav)[0] == 200 and req("/internal/act", headers=nav)[0] == 200
 
 
 def test_login_password_default_then_own(monkeypatch, tmp_path):
