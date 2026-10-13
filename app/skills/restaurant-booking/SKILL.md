@@ -66,8 +66,11 @@ Recommend 1–2 with a short reason. If the user already said "just book the bes
 - Final answer: the confirmed details, reference number, how to change/cancel, anything still pending.
 
 ## Blocked sites
-Some sites (e.g. OpenTable) block automated browsers ("Access Denied", 403, robot checks). Don't retry other URLs on that
-site: use Reserve with Google or another provider for the same restaurant. Only if the user insists on that exact site,
+Some sites (e.g. OpenTable, Tabelog) block automated browsers ("Access Denied", 403, Cloudflare "Just a moment…").
+Don't retry other URLs on that site: switch at once to Reserve with Google or another provider for the same restaurant.
+Japan: TableCheck (`https://www.tablecheck.com/en/japan`), Omakase (`https://omakase.in/en`), the restaurant's own site,
+or Google Maps "Reserve a table". Singapore: Chope, TableCheck, SevenRooms. Say in the answer which site blocked and what
+you used instead. Only if the user insists on that exact site,
 request a takeover so they can pass the check themselves.
 
 ## Showing the shortlist

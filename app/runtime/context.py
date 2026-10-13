@@ -166,6 +166,17 @@ def _mentions(fact_text: str, group: list[str]) -> bool:
     return any(a.lower() in low for a in group)
 
 
+# identity documents (passport number / expiry, ID card, date of birth …): only when the request needs them filled in
+_ID_DOC = re.compile(r"护照|身份证|出生日期|生日|签发|有效期至|证件号|\b(passport|date of birth|DOB|born on|national id|NRIC|FIN|"
+                     r"id (card|number)|identity card|expir(y|es|ation))\b", re.I)
+_NEEDS_ID = re.compile(r"填写|填表|表格|表单|申请|值机|登机|旅客信息|乘客信息|入住登记|护照.{0,6}(到期|过期|有效|续)|证件|"
+                       r"\b(form|apply|application|check-?in|passenger (details|info)|traveller details|renew)\b", re.I)
+
+
+def needs_id(request: str) -> bool:
+    return bool(_NEEDS_ID.search(request or ""))
+
+
 _TRIGGER = re.compile(r"(?:说|says?|ask(?:s)? for)\s*[「“\"']([^」”\"']{2,20})[」”\"']")
 GENERAL_RULE = re.compile(r"the assistant|OMuse|助手|autonomous|自主|直接执行", re.I)
 
@@ -179,9 +190,12 @@ def select(request: str, facts: list[dict], entities: list[dict] | None = None, 
     its = intents(req) or intents(context)
     groups = named(whole, entities)
     rtoks = tokens(req)
+    want_id = needs_id(req)
     scored = []
     for f in facts:
         text = f"{f.get('fact') or ''} {f.get('entity') or ''}"
+        if not want_id and _ID_DOC.search(f.get("fact") or ""):
+            continue        # passport / ID / birth date stay out of answers unless a form needs them
         dom = f.get("domain") or domain_of(f.get("fact") or "", f.get("category") or "", f.get("entity") or "")
         s, why = 0.0, []
         trig = _TRIGGER.findall(f.get("fact") or "")
@@ -231,7 +245,11 @@ def render(selected: list[dict], en: bool = False) -> str:
 
 USE_RULE = ("Use these directly — do NOT ask the user again for anything listed here (sizes, cabin class, cuisine, which "
             "mailbox, delivery habits …); say in your answer which of them you applied. Ask only for what is really "
-            "missing, and memory_search before asking about the user's own preferences.")
+            "missing, and memory_search before asking about the user's own preferences. Apply a fact only when the request "
+            "is about it: for a general question (weather, visas, what to pack, sights) do not assume who travels with "
+            "the user, group size or a business purpose, and never repeat document numbers, birth dates, family "
+            "members' full names or passport details in the answer unless the user asked for them. Bookings found in "
+            "e-mails marked as test / fictional are not the user's real plans.")
 
 
 def site_name(url: str) -> str:

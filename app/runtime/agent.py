@@ -881,6 +881,11 @@ class Runtime:
             await self.event(info["task_id"], "llm_retry", {k: info[k] for k in ("attempt", "of", "wait_s", "reason", "source", "purpose")})
 
     async def _on_llm_call(self, info: dict):
+        tid = info.get("task_id")
+        if tid and info.get("wait_s"):
+            # time spent queued for a model slot (other tasks were using it) does not count against this task's budget
+            waits = self.__dict__.setdefault("_llm_wait", {})
+            waits[tid] = waits.get(tid, 0.0) + float(info.get("wait_s") or 0)
         await self.audit("llm", f"model.{info['purpose']}", info.get("task_id", ""), resource=info.get("model", ""),
                          result="success", detail=info)
 
@@ -1442,6 +1447,7 @@ class Runtime:
         max_steps = int(s.get("max_steps") or 30)
         consecutive_errors = 0
         run_started = time.time()
+        self.__dict__.setdefault("_llm_wait", {})[task_id] = 0.0
         started_txt = prompts.now_str(s["timezone"], agent_lang(s))
         try:
             max_minutes = max(0.5, float(s.get("max_minutes") or 20))
@@ -1471,7 +1477,7 @@ class Runtime:
                 facts=facts, skills=self.skills(), extra=extra, language=agent_lang(s),
                 reply_lang=self.reply_lang(t, s), now_txt=started_txt)}
             transcript = self._compress(transcript)
-            minutes = (time.time() - run_started) / 60
+            minutes = max(0.0, time.time() - run_started - self.__dict__.get("_llm_wait", {}).get(task_id, 0.0)) / 60
             if minutes >= max_minutes * TIME_NUDGE and TIME_MARK not in "\n".join(
                     str(m.get("content") or "") for m in transcript if m.get("role") == "user"):
                 transcript.append({"role": "user", "content": prompts.L(
@@ -3041,10 +3047,20 @@ class Runtime:
             return truncate(txt, 60_000) if txt else "（报告还是空的 the report is empty）"
         if name == "memory_search":
             rows = self.store.search_facts(str(a.get("query", "")), 15, tier=None)
+            from app.runtime import context as CTX
+            if not CTX.needs_id(t.get("goal") or ""):
+                # passport / ID / birth-date facts: only for tasks that fill in a form or check a document
+                hidden = [r for r in rows if CTX._ID_DOC.search(r.get("fact") or "")]
+                rows = [r for r in rows if r not in hidden]
+            else:
+                hidden = []
             eps = [e for e in self.store.episodes(200) if any(w in e["summary"] for w in str(a.get("query", "")).split() if len(w) > 1)][:5]
             out = [f"[{r['id']}]{' (recent)' if r.get('tier') == 'recent' else ''}{' (unconfirmed)' if r.get('status') == 'pending' else ''}"
                    f" ({r.get('domain') or ''}) {r['fact']}" for r in rows]
             out += [f"(episode {time.strftime('%Y-%m-%d', time.localtime(e['ts']))}) {truncate(e['summary'], 300)}" for e in eps]
+            if hidden:
+                out.append(f"({len(hidden)} 条证件类记忆未显示：只有填表、值机、证件到期检查等任务才使用 — {len(hidden)} identity-document "
+                           "facts hidden; they are only used for forms, check-in or document-expiry checks)")
             return "\n".join(out) or "没有相关记忆 no memories found"
         if name == "profile_get":
             from app.runtime.store import PROFILE_FIELDS

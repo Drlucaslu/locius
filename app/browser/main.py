@@ -1345,6 +1345,7 @@ async def agent_action(action: str, req: Request):
                 loc = broker.locate(task_id, body.get("ref", ""))
                 text = str(body.get("text", ""))
                 try:
+                    loc = await _editable_in(loc)
                     try:   # <input type=time/date/…> only accepts its ISO format: "12:00 PM" or "2026-10-03 12:00" fail
                         kind = await loc.evaluate("e => (e.tagName === 'INPUT' ? e.type : '')", timeout=3000)
                     except Exception:
@@ -1362,7 +1363,10 @@ async def agent_action(action: str, req: Request):
                         try:
                             await loc.fill(text, timeout=8000)
                         except Exception:
+                            # clear first: typing into a field that still holds "Hartford" gives "HartfordTokyo"
                             await loc.click(timeout=5000)
+                            await page.keyboard.press("Control+a")
+                            await page.keyboard.press("Backspace")
                             await page.keyboard.type(text, delay=15)
                     if body.get("submit"):
                         await loc.press("Enter", timeout=5000)
@@ -1584,6 +1588,23 @@ async def _user_input(body: dict):
 @app.exception_handler(HTTPException)
 async def http_exc(req, exc: HTTPException):
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+
+async def _editable_in(loc):
+    """The ref may point at a wrapper (a dialog, a combobox div, a label) rather than the text box itself: use the
+    first visible input / textarea / contenteditable inside it, so fill() works and nothing is typed into the wrong box."""
+    try:
+        ok = await loc.evaluate("e => e.tagName === 'INPUT' || e.tagName === 'TEXTAREA' || e.isContentEditable"
+                                " || e.getAttribute('role') === 'textbox' || e.getAttribute('role') === 'searchbox'",
+                                timeout=3000)
+        if ok:
+            return loc
+        inner = loc.locator("input:not([type=hidden]):visible, textarea:visible, [contenteditable=true]:visible").first
+        if await inner.count():
+            return inner
+    except Exception:
+        pass
+    return loc
 
 
 async def _field_hint(loc) -> str:

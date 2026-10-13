@@ -3141,3 +3141,27 @@ def test_assets_stamp_cache_rules_gzip_and_reload(tmp_path):
     v2 = a.version()
     assert v2 != v and a.get("app.js").body == b"console.log('y');"
     assert a.response("app.js", req("/static/app.js", f"v={v}")).headers["cache-control"] == REVALIDATE
+def test_032_id_facts_only_when_needed():
+    from app.runtime import context as C
+    facts = [{"fact": "护照号 E1234567，有效期至 2031-05-01", "category": "account"},
+             {"fact": "Lucas prefers direct flights", "category": "preference"},
+             {"fact": "Date of birth 1980-01-01", "category": "person"}]
+    sel = C.select("查一下11月下旬东京的天气，给我一份旅行行李清单，护照要带吗", facts)
+    assert not any("护照号" in f["fact"] or "birth" in f["fact"] for f in sel)
+    sel = C.select("帮我填写这个航班值机的旅客信息表格，护照", facts)
+    assert any("护照号" in f["fact"] for f in sel)
+    assert "group size" in C.USE_RULE
+
+
+def test_032_travel_skill_present():
+    import pathlib
+    p = pathlib.Path(__file__).resolve().parents[1] / "app/skills/travel-planning/SKILL.md"
+    txt = p.read_text()
+    assert txt.startswith("---\nname: travel-planning\n") and "booking.com/searchresults" in txt
+
+
+def test_034_needs_id():
+    from app.runtime import context as C
+    assert not C.needs_id("生成一份出发前 7 天的待办清单并设置提醒")
+    assert C.needs_id("帮我在线值机，填写旅客信息")
+    assert C.needs_id("看看我的护照还有多久到期")
