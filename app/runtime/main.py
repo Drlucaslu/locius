@@ -729,7 +729,34 @@ async def notifications_read():
 # ------------------------------------------------------------------ settings
 @app.get("/api/settings")
 async def get_settings():
-    return {"settings": rt.store.settings(), "skills": [{"name": s["name"], "description": s["description"]} for s in rt.skills()]}
+    """settings: the values in force (the model key only as model_api_key_set). model_user: the user's own model
+    settings as saved in Settings → Models, whether or not they are switched on."""
+    from app.runtime.store import SYSTEM_MODEL, redacted
+    system = {k: v for k, v in SYSTEM_MODEL.items() if k.endswith("_model") or k == "model_name"}   # names only, no endpoint
+    return {"settings": redacted(rt.store.settings()), "model_user": rt.store.user_model(), "system_model": system,
+            "skills": [{"name": s["name"], "description": s["description"]} for s in rt.skills()]}
+
+
+def check_model_override(b: dict, saved: dict) -> None:
+    """Settings → Models → "use my own model": the endpoint, the key and the LLM are required (a key already saved
+    counts). Normalises the values in place; raises HTTPException 400 with a bilingual message."""
+    url = str(b.get("model_base_url", saved.get("model_base_url")) or "").strip().rstrip("/")
+    name = str(b.get("model_name", saved.get("model_name")) or "").strip()
+    key = str(b.get("model_api_key") or "").strip() or str(saved.get("model_api_key") or "")
+    if not re.match(r"^https?://\S+$", url):
+        raise HTTPException(400, "接口地址必须是以 http:// 或 https:// 开头的网址 (the endpoint must be an http(s) URL)")
+    if not name:
+        raise HTTPException(400, "必须填写执行任务的 LLM 模型名 (the LLM model name is required)")
+    if not key:
+        raise HTTPException(400, "必须填写 API key (an API key is required to use your own model)")
+    b["model_base_url"], b["model_name"] = url, name
+    if str(b.get("model_api_key") or "").strip():
+        b["model_api_key"] = str(b["model_api_key"]).strip()
+    else:
+        b.pop("model_api_key", None)    # blank: the saved key stays as it is
+    for k in ("planner_model", "vision_model", "stt_model", "image_model"):
+        if k in b:
+            b[k] = str(b[k] or "").strip()
 
 
 @app.put("/api/settings")
@@ -737,9 +764,19 @@ async def put_settings(req: Request):
     b = await req.json()
     if "memory_consolidate_at" in b and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", str(b["memory_consolidate_at"]).strip()):
         raise HTTPException(400, "整理时间格式应为 HH:MM (time must be HH:MM)")
+    if b.get("model_override"):
+        b["model_override"] = True
+        # defaults for fields left out: the user's own values as saved (never the system's)
+        check_model_override(b, dict(rt.store.user_model(), model_api_key=rt.store.saved_settings().get("model_api_key") or ""))
+    elif "model_override" in b:
+        b["model_override"] = False
+    if "model_api_key" in b and not str(b["model_api_key"] or "").strip():
+        b.pop("model_api_key")     # an empty key field means "keep the saved one"
     s = rt.store.set_settings(b)
-    await rt.audit("user", "settings.update", detail=b)
-    return {"settings": s}
+    from app.runtime.store import redacted
+    detail = {k: ("(set)" if k == "model_api_key" else v) for k, v in b.items()}   # the key itself is never logged
+    await rt.audit("user", "settings.update", detail=detail)
+    return {"settings": redacted(s)}
 
 
 @app.post("/api/settings/test-model")
@@ -760,11 +797,15 @@ async def test_models(req: Request):
     before saving."""
     from app.runtime import imagegen
     from app.runtime.llm import LLM, LLMError
+    from app.runtime.store import effective_model
     b = await req.json() if (req.headers.get("content-length") or "0") not in ("0", "") else {}
-    s = dict(rt.store.settings())
-    for k in ("model_base_url", "model_name", "planner_model", "vision_model", "stt_model", "image_model", "llm_timeout"):
+    s = dict(rt.store.saved_settings())
+    for k in ("model_override", "model_base_url", "model_name", "planner_model", "vision_model", "stt_model", "image_model", "llm_timeout"):
         if k in b:
             s[k] = b[k]
+    if str(b.get("model_api_key") or "").strip():
+        s["model_api_key"] = str(b["model_api_key"]).strip()
+    s = effective_model(s)     # the form's own-model values with the toggle on, else the system's
     llm = LLM(lambda: s)
     results = []
 
@@ -796,7 +837,7 @@ async def test_models(req: Request):
         base, model = await imagegen.resolve(s)
         listed = None
         try:
-            listed = model in [str(m.get("id") or "") for m in await imagegen.list_models(base)]
+            listed = model in [str(m.get("id") or "") for m in await imagegen.list_models(base, settings=s)]
         except Exception:
             pass
         if listed is False:

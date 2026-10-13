@@ -2208,20 +2208,41 @@ async function viewSettings(root) {
     return h('label', { class: 'field' }, h('span', null, `${zh} `, LANG === 'en' ? null : h('span', { class: 'muted' }, en)), i, help ? h('span', null, help) : null); };
   const tog = (k, zh) => { const i = h('input', { type: 'checkbox', checked: !!s[k] }); f[k] = i; return h('label', { class: 'toggle' }, i, zh); };
   const testOut = h('div', { class: 'stack', style: 'gap:2px' });
+  // Settings → Models: the user's own endpoint, key and model names (r.model_user, as saved) behind a toggle. Off: the
+  // section is closed and the system's values (from the environment) are in force; on: the three required fields must be filled
+  const mu = r.model_user || {};
+  const sm = r.system_model || {};
+  const MODEL_FIELDS = ['model_base_url', 'model_name', 'planner_model', 'vision_model', 'stt_model', 'image_model'];
+  const mfield = (k, zh, en, required) => { const i = h('input', { type: 'text', value: mu[k] ?? '', required: required || null, autocomplete: 'off', spellcheck: 'false' }); f[k] = i;
+    return h('label', { class: 'field' }, h('span', null, `${zh} `, LANG === 'en' ? null : h('span', { class: 'muted' }, en), required ? h('span', { class: 'req', title: T('必填') }, ' *') : null), i); };
+  const keyIn = h('input', { type: 'password', value: '', autocomplete: 'new-password', placeholder: mu.api_key_set ? T('已保存；留空=不改') : 'sk-…' });
+  f.model_api_key = keyIn;
+  const modelBox = h('div', { class: 'stack', id: 'modelOverride', hidden: !s.model_override },
+    mfield('model_base_url', T('接口地址'), 'Base URL', true),
+    h('label', { class: 'field' }, h('span', null, 'API key', h('span', { class: 'req', title: T('必填') }, ' *')), keyIn),
+    mfield('model_name', T('LLM（执行任务）'), 'LLM', true),
+    mfield('planner_model', T('规划模型（留空=同 LLM）'), 'Planner'),
+    mfield('vision_model', T('视觉模型（看截图和图片，留空=同 LLM）'), 'Vision'),
+    mfield('stt_model', T('语音转文字模型（留空=自动寻找 whisper 类模型）'), 'Speech-to-text'),
+    mfield('image_model', T('图像生成模型（留空=自动）'), 'Image'));
+  // the three required fields, or a message naming the first one missing ('' = fine)
+  const modelMissing = () => !f.model_override.checked ? '' : !/^https?:\/\/\S+$/.test(f.model_base_url.value.trim()) ? T('请填写接口地址（http:// 或 https:// 开头）')
+    : !(keyIn.value.trim() || mu.api_key_set) ? T('请填写 API key') : !f.model_name.value.trim() ? T('请填写执行任务的 LLM 模型名') : '';
   root.append(h('div', { class: 'grid2' },
     interfaceCard(s, f),
-    h('div', { class: 'card stack' }, h('h3', null, T('🧠 模型 Models')),
+    h('div', { class: 'card stack', id: 'models' }, h('h3', null, T('🧠 模型 Models')),
       h('p', { class: 'sub' }, T('任何 OpenAI 兼容接口都可以用。每类请求可以交给不同的模型，没有哪家模型提供商能看到你的全部信息；推理、网页浏览和工具调用都在云端完成。')),
-      field('model_base_url', T('接口地址'), 'Base URL'),
-      field('model_name', T('LLM（执行任务）'), 'LLM'),
-      field('planner_model', T('规划模型（留空=同 LLM）'), 'Planner'),
-      field('vision_model', T('视觉模型（看截图和图片，留空=同 LLM）'), 'Vision'),
-      field('stt_model', T('语音转文字模型（留空=自动寻找 whisper 类模型）'), 'Speech-to-text'),
-      field('image_model', T('图像生成模型（留空=自动）'), 'Image'),
+      h('div', { class: 'small muted', id: 'systemModel' }, Tf("系统默认：LLM {0}", modelLabel(sm.model_name)),
+        sm.planner_model ? Tf(" · 规划 {0}", modelLabel(sm.planner_model)) : '', sm.vision_model ? Tf(" · 视觉 {0}", modelLabel(sm.vision_model)) : '',
+        sm.stt_model ? Tf(" · 语音转文字 {0}", modelLabel(sm.stt_model)) : '', sm.image_model ? Tf(" · 图像 {0}", modelLabel(sm.image_model)) : ''),
+      h('div', null, tog('model_override', T('使用自己的模型 Use my own model')),
+        h('div', { class: 'small muted', style: 'margin-top:4px' }, T('打开后，下面填的接口、API key 和模型会代替系统默认，三项必填。关掉就回到系统默认，下面的值全部不再使用（保留着，再打开时还在）。'))),
+      modelBox,
       field('llm_timeout', T('超时（秒）'), 'Timeout s', 'number'),
       h('div', { class: 'row' }, h('button', { class: 'btn small', onclick: safe(async () => {
         testOut.replaceChildren(h('span', { class: 'small muted' }, T('测试中…')));
-        const body = {}; for (const k of ['model_base_url', 'model_name', 'planner_model', 'vision_model', 'stt_model', 'image_model']) body[k] = f[k].value;
+        const body = { model_override: f.model_override.checked };
+        if (body.model_override) { for (const k of MODEL_FIELDS) body[k] = f[k].value; if (f.model_api_key.value) body.model_api_key = f.model_api_key.value; }
         const t = await api('settings/test-models', { method: 'POST', body });
         const label = { llm: 'LLM', planner: T('规划 Planner'), vision: T('视觉 Vision'), stt: T('语音转文字 STT'), image: T('图像 Image') };
         testOut.replaceChildren(...t.results.map(x => h('div', { class: 'small' }, (x.ok ? '✓ ' : '✕ ') + (label[x.kind] || x.kind) + (x.model ? ` (${x.model})` : '') + ': ',
@@ -2243,11 +2264,17 @@ async function viewSettings(root) {
   ), h('div', { style: 'margin-top:16px' }, h('button', { class: 'btn primary', onclick: safe(async () => {
     const body = {};
     for (const [k, el] of Object.entries(f)) body[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+    if (!body.model_override) { for (const k of MODEL_FIELDS) delete body[k]; }   // off: the saved values stay but are ignored
+    if (!body.model_api_key) delete body.model_api_key;                              // empty: keep the saved key
+    const miss = modelMissing();
+    if (miss) { toast(miss, true); (!/^https?:/.test(f.model_base_url.value.trim()) ? f.model_base_url : !(keyIn.value.trim() || mu.api_key_set) ? keyIn : f.model_name).focus(); return; }
     await api('settings', { method: 'PUT', body }); toast(T('已保存 Saved')); refreshModelChip();
+    if (body.model_override && body.model_api_key) { mu.api_key_set = true; keyIn.value = ''; keyIn.placeholder = T('已保存；留空=不改'); }
     applyTheme(body.theme);
     const want = UI_LANGS.includes(body.ui_language) ? body.ui_language : browserLang();
     if (want !== LANG) { try { localStorage.setItem('omuse_ui', want); } catch (e) { /* ignore */ } location.reload(); }
   }) }, T('保存设置 Save settings'))));
+  f.model_override.onchange = () => { modelBox.hidden = !f.model_override.checked; if (f.model_override.checked) f.model_base_url.focus(); };
   // standalone installs (OMUSE_PASSWORD): change the login password
   const pw = await sapi('password').catch(() => null);
   if (pw && pw.enabled) root.append(passwordCard(pw));
@@ -2425,12 +2452,13 @@ document.addEventListener('visibilitychange', () => {
   if (!ES || ES.readyState === 2 || Date.now() - lastEv > 20000) connectStream(); else resync();
 });
 
+function modelLabel(name) { return String(name || '').split('/').pop().replace(/-GGUF.*$/i, ''); }
+
 async function refreshModelChip() {
   try {
     const r = await api('settings');
-    const name = String(r.settings.model_name || '').split('/').pop().replace(/-GGUF.*$/i, '');
-    $('#modelChip').textContent = '🧠 ' + name;
-    $('#modelChip').title = r.settings.model_base_url;
+    $('#modelChip').textContent = '🧠 ' + modelLabel(r.settings.model_name);
+    $('#modelChip').title = r.settings.model_override ? T('自己的模型 Own model') + ' · ' + r.settings.model_base_url : r.settings.model_base_url;
   } catch (e) { $('#modelChip').textContent = T('模型 ?'); }
 }
 

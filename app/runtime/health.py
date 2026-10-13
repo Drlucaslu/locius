@@ -83,7 +83,7 @@ class Health:
             return False, "没有配置模型服务地址"
         try:
             async with httpx.AsyncClient(timeout=20) as c:
-                r = await c.get(f"{base}/models", headers=auth_headers())
+                r = await c.get(f"{base}/models", headers=auth_headers(s))
             if r.status_code >= 400:
                 return False, f"模型服务返回 HTTP {r.status_code}"
             models = [m for m in (r.json().get("data") or []) if isinstance(m, dict)]

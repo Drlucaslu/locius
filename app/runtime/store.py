@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS notifications (
 """
 
 DEFAULT_SETTINGS = {
+    # Settings → Models. The system's endpoint, key and model names come from the environment (OMUSE_MODEL_URL,
+    # OMUSE_MODEL_API_KEY, OMUSE_MODEL …). The user may switch model_override on and use their own: then the
+    # model_* values saved here and their own model_api_key are used instead, as a set; switched off, everything
+    # saved here is ignored and the system's values are back (see effective_model).
+    "model_override": False,
+    "model_api_key": "",      # the user's own bearer key (only used with model_override; never returned by the API)
     "model_base_url": os.environ.get("OMUSE_MODEL_URL") or os.environ.get("PERSONA_MODEL_URL", ""),
     "model_name": os.environ.get("OMUSE_MODEL") or os.environ.get("PERSONA_MODEL", "Olares/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL"),
     "planner_model": os.environ.get("OMUSE_PLANNER_MODEL", "").strip(),
@@ -80,6 +86,39 @@ DEFAULT_SETTINGS = {
     "disable_thinking": False,
     "llm_timeout": 600,
 }
+
+
+# the model settings a user may override as a set (Settings → Models → "use my own model")
+MODEL_KEYS = ("model_base_url", "model_name", "planner_model", "vision_model", "stt_model", "image_model", "image_base_url")
+MODEL_REQUIRED = ("model_base_url", "model_api_key", "model_name")
+SYSTEM_MODEL = {k: DEFAULT_SETTINGS[k] for k in MODEL_KEYS}
+
+
+def system_model_api_key() -> str:
+    """The system's bearer key for the model endpoint (OMUSE_MODEL_API_KEY). Environment only: it never shows up in
+    Settings, the audit log or the API."""
+    return (os.environ.get("OMUSE_MODEL_API_KEY") or os.environ.get("PERSONA_MODEL_API_KEY") or "").strip()
+
+
+def effective_model(s: dict) -> dict:
+    """The model settings in force: the user's own endpoint, key and model names when model_override is on, else the
+    system's (from the environment) — never a mix, so the system's key is never sent to a user's endpoint and the
+    user's key never to the system's. The user's own set has no separate image endpoint: images use their endpoint."""
+    s = dict(s)
+    if s.get("model_override"):
+        s["model_api_key"] = str(s.get("model_api_key") or "")
+        s["image_base_url"] = ""
+    else:
+        s.update(SYSTEM_MODEL)
+        s["model_api_key"] = system_model_api_key()
+    return s
+
+
+def redacted(s: dict) -> dict:
+    """Settings as the API returns them: the key itself never leaves the runtime, only whether one is saved."""
+    out = {k: v for k, v in s.items() if k != "model_api_key"}
+    out["model_api_key_set"] = bool(s.get("model_api_key"))
+    return out
 
 
 PROFILE_FIELDS = [   # key, 中文, English
@@ -180,11 +219,24 @@ class RStore:
         self._sort_domains()
 
     # ------------------------------------------------------------ settings
-    def settings(self) -> dict:
+    def saved_settings(self) -> dict:
+        """Defaults overlaid with what was saved — the model_* values as saved, whether or not they are in force."""
         s = dict(DEFAULT_SETTINGS)
         for r in self.db.all("SELECT key, value FROM settings"):
             s[r["key"]] = loads(r["value"], r["value"])
         return s
+
+    def settings(self) -> dict:
+        """The settings in force (model_* and model_api_key resolved by effective_model)."""
+        return effective_model(self.saved_settings())
+
+    def user_model(self) -> dict:
+        """The user's own model settings as saved (Settings → Models form), '' where never saved; the key only as
+        api_key_set."""
+        rows = {r["key"]: loads(r["value"], r["value"]) for r in self.db.all("SELECT key, value FROM settings")}
+        out = {k: str(rows.get(k) or "") for k in MODEL_KEYS if k != "image_base_url"}
+        out["api_key_set"] = bool(rows.get("model_api_key"))
+        return out
 
     def set_settings(self, d: dict) -> dict:
         for k, v in d.items():

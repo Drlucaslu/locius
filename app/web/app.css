@@ -86,6 +86,7 @@ input[type=text], input[type=email], input[type=password], input[type=number], s
 textarea { resize: vertical; }
 label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
 label.field > span { font-weight: 600; color: var(--text); }
+label.field .req { color: var(--danger); font-weight: 700; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }

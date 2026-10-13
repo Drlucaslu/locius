@@ -2766,13 +2766,18 @@ async def test_settings_test_models_endpoint(monkeypatch):
         async def transcribe(self, audio, filename="a.wav", task_id=""): return ""
     monkeypatch.setattr(L, "LLM", FakeLLM)
 
-    async def fake_list(base):
+    async def fake_list(base, settings=None):
         return [{"id": "gpt-image-1"}, {"id": "gpt-4o"}]
     monkeypatch.setattr(imagegen, "list_models", fake_list)
+    monkeypatch.setenv("OMUSE_MODEL_URL", "http://x/v1"); monkeypatch.setenv("OMUSE_MODEL", "gpt-4o")
+    from app.runtime import store as ST
+    monkeypatch.setattr(ST, "SYSTEM_MODEL", dict(ST.SYSTEM_MODEL, model_base_url="http://x/v1", model_name="gpt-4o", planner_model="",
+                                                   vision_model="", stt_model="", image_model="", image_base_url=""))
 
     class _Store:
-        def settings(self): return {"model_base_url": "http://x/v1", "model_name": "gpt-4o", "planner_model": "", "vision_model": "",
-                                    "stt_model": "", "image_model": "", "llm_timeout": 60}
+        def saved_settings(self): return {"model_override": False, "model_api_key": "", "model_base_url": "http://x/v1", "model_name": "gpt-4o",
+                                          "planner_model": "", "vision_model": "", "stt_model": "", "image_model": "", "llm_timeout": 60}
+        def settings(self): return ST.effective_model(self.saved_settings())
     class _RT:
         store = _Store()
     monkeypatch.setattr(rmain, "rt", _RT())
@@ -2784,11 +2789,90 @@ async def test_settings_test_models_endpoint(monkeypatch):
     assert not by["stt"]["ok"] and "speech-to-text" in by["stt"]["error"]
     assert by["image"]["ok"] and by["image"]["resolved_model"] == "gpt-image-1" and "not generated" in by["image"]["reply"]
     # the form's values are tested, including a planner the endpoint lacks and an explicit image model it does not list
-    r = await rmain.test_models(Req({"planner_model": "missing-model", "stt_model": "whisper-1", "image_model": "dall-e-9"}))
+    own = {"model_override": True, "model_base_url": "http://x/v1", "model_api_key": "k", "model_name": "gpt-4o"}
+    r = await rmain.test_models(Req({**own, "planner_model": "missing-model", "stt_model": "whisper-1", "image_model": "dall-e-9"}))
     by = {x["kind"]: x for x in r["results"]}
     assert not by["planner"]["ok"] and "404" in by["planner"]["error"]
     assert by["stt"]["ok"] and by["stt"]["model"] == "whisper-1"
     assert not by["image"]["ok"] and "dall-e-9" in by["image"]["error"]
+    # the same form values with the toggle off are ignored: the system's models are tested
+    r = await rmain.test_models(Req({"model_override": False, "planner_model": "missing-model", "stt_model": "whisper-1"}))
+    by = {x["kind"]: x for x in r["results"]}
+    assert by["planner"]["same_as"] == "llm" and not by["stt"]["ok"]
+
+
+def test_model_override_effective_settings(tmp_path, monkeypatch):
+    """Settings → Models: the system's endpoint/key/models (environment) unless the user switched their own on; never a mix."""
+    from app.runtime import store as ST
+    from app.runtime.llm import auth_headers
+    from app.runtime.imagegen import image_auth_headers
+    monkeypatch.setenv("OMUSE_MODEL_API_KEY", "sys-key")
+    monkeypatch.setenv("OMUSE_IMAGE_API_KEY", "sys-image-key")
+    monkeypatch.setattr(ST, "SYSTEM_MODEL", dict(ST.SYSTEM_MODEL, model_base_url="http://sys/v1", model_name="sys-llm", planner_model="sys-planner",
+                                                   image_base_url="http://sys-img/v1"))
+    st = ST.RStore(str(tmp_path))
+    s = st.settings()
+    assert s["model_override"] is False and s["model_base_url"] == "http://sys/v1" and s["model_name"] == "sys-llm" and s["model_api_key"] == "sys-key"
+    assert auth_headers(s) == {"Authorization": "Bearer sys-key"} and image_auth_headers(s) == {"Authorization": "Bearer sys-image-key"}
+    assert st.user_model() == {"model_base_url": "", "model_name": "", "planner_model": "", "vision_model": "", "stt_model": "", "image_model": "", "api_key_set": False}
+    # the user's own values saved but switched off: ignored
+    st.set_settings({"model_base_url": "http://me/v1", "model_name": "my-llm", "model_api_key": "my-key"})
+    s = st.settings()
+    assert s["model_base_url"] == "http://sys/v1" and s["model_name"] == "sys-llm" and s["model_api_key"] == "sys-key" and s["planner_model"] == "sys-planner"
+    assert st.user_model()["model_name"] == "my-llm" and st.user_model()["api_key_set"] is True
+    # switched on: the user's set, and only the user's key goes to their endpoint (no system image key either)
+    st.set_settings({"model_override": True})
+    s = st.settings()
+    assert s["model_base_url"] == "http://me/v1" and s["model_name"] == "my-llm" and s["model_api_key"] == "my-key"
+    assert s["planner_model"] == "" and s["image_base_url"] == ""
+    assert auth_headers(s) == {"Authorization": "Bearer my-key"} and image_auth_headers(s) == {"Authorization": "Bearer my-key"}
+    # the API never returns the key, only whether one is saved
+    red = ST.redacted(s)
+    assert "model_api_key" not in red and red["model_api_key_set"] is True and red["model_name"] == "my-llm"
+    assert "sys-key" not in str(red) and "my-key" not in str(red)
+    # off again: back to the system's, the user's values kept
+    st.set_settings({"model_override": False})
+    assert st.settings()["model_name"] == "sys-llm" and st.user_model()["model_name"] == "my-llm"
+    # without settings, auth_headers is the system's key (environment)
+    assert auth_headers() == {"Authorization": "Bearer sys-key"}
+
+
+@pytest.mark.asyncio
+async def test_settings_put_own_model_validation_and_audit(tmp_path, monkeypatch):
+    """PUT /api/settings with model_override on needs the endpoint (http(s) URL), a key (saved counts) and the LLM; the
+    key is never in the audit detail nor in the response."""
+    from fastapi import HTTPException
+    from app.runtime import main as rmain, store as ST
+
+    class Req:
+        def __init__(self, b): self._b = b
+        async def json(self): return self._b
+
+    audits = []
+
+    class _RT:
+        store = ST.RStore(str(tmp_path))
+        async def audit(self, actor, action, task_id="", **kw): audits.append(kw)
+    monkeypatch.setattr(rmain, "rt", _RT())
+    for body in ({"model_override": True}, {"model_override": True, "model_base_url": "http://me/v1", "model_name": "m"},
+                 {"model_override": True, "model_base_url": "http://me/v1", "model_api_key": "k"},
+                 {"model_override": True, "model_base_url": "me/v1", "model_api_key": "k", "model_name": "m"},
+                 {"model_override": True, "model_base_url": "ftp://me/v1", "model_api_key": "k", "model_name": "m"}):
+        with pytest.raises(HTTPException) as ei:
+            await rmain.put_settings(Req(body))
+        assert ei.value.status_code == 400 and "(" in ei.value.detail
+    assert _RT.store.settings()["model_override"] is False and not audits
+    r = await rmain.put_settings(Req({"model_override": True, "model_base_url": "http://me/v1/", "model_api_key": " k1 ", "model_name": " m ", "planner_model": " p "}))
+    assert r["settings"]["model_override"] is True and r["settings"]["model_base_url"] == "http://me/v1" and r["settings"]["model_name"] == "m"
+    assert r["settings"]["planner_model"] == "p" and r["settings"]["model_api_key_set"] is True and "model_api_key" not in r["settings"]
+    assert audits[-1]["detail"]["model_api_key"] == "(set)" and "k1" not in str(audits)
+    # a blank key keeps the saved one; the saved key satisfies the requirement
+    r = await rmain.put_settings(Req({"model_override": True, "model_api_key": "", "model_name": "m2"}))
+    assert r["settings"]["model_api_key_set"] is True and _RT.store.settings()["model_api_key"] == "k1" and r["settings"]["model_name"] == "m2"
+    assert "model_api_key" not in audits[-1]["detail"]
+    # off: no requirements, the system's values are back
+    r = await rmain.put_settings(Req({"model_override": False}))
+    assert r["settings"]["model_override"] is False and r["settings"]["model_base_url"] == ST.SYSTEM_MODEL["model_base_url"]
 
 
 def test_image_size_header_parser(tmp_path):
@@ -2896,14 +2980,16 @@ def test_subscription_needs_all_three_stripe_vars(monkeypatch):
 
 
 def test_model_defaults_from_env():
-    # planner / vision / speech-to-text defaults come from the environment; a saved setting still wins
+    # planner / vision / speech-to-text defaults come from the environment; a saved setting wins only with the user's
+    # own model switched on (Settings → Models)
     import subprocess, sys
     code = ("import tempfile; from app.runtime.store import RStore; st = RStore(tempfile.mkdtemp()); s = st.settings();"
             "print(s['planner_model'], s['vision_model'], s['stt_model'] or '-');"
-            "print(st.set_settings({'vision_model': 'saved-v'})['vision_model'])")
+            "print(st.set_settings({'vision_model': 'saved-v'})['vision_model'], "
+            "st.set_settings({'model_override': True, 'model_base_url': 'http://me/v1', 'model_api_key': 'k', 'model_name': 'm'})['vision_model'])")
     env = {**os.environ, "OMUSE_PLANNER_MODEL": "plan-1", "OMUSE_VISION_MODEL": " vis-1 ", "OMUSE_STT_MODEL": ""}
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True).stdout.split("\n")
-    assert out[0] == "plan-1 vis-1 -" and out[1] == "saved-v", out
+    assert out[0] == "plan-1 vis-1 -" and out[1] == "vis-1 saved-v", out
 
 
 def test_chat_titles_are_cleaned_and_cut():

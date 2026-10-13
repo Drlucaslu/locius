@@ -68,7 +68,7 @@ docker run -d --name omuse --restart unless-stopped \
   omuse
 ```
 
-Open `http://localhost:8080` and sign in as `omuse` (change with `OMUSE_USER`) with your password. `OMUSE_PASSWORD` is only the initial password: change it in Settings → Password (the UI reminds you until you do); the new one is stored hashed in the volume and wins from then on. Olares normally does the login; here the container asks for HTTP Basic auth and refuses to start without `OMUSE_PASSWORD`. Before opening the port to the internet, put HTTPS in front (Cloudflare Tunnel, Tailscale Funnel, Caddy, …) — Basic auth over plain HTTP sends the password in the clear. `OMUSE_MODEL_API_KEY` is sent as a Bearer token to the model endpoint and is never stored in Settings. Add `-p 8083:8083` only if you use the Telnyx phone line.
+Open `http://localhost:8080` and sign in as `omuse` (change with `OMUSE_USER`) with your password. `OMUSE_PASSWORD` is only the initial password: change it in Settings → Password (the UI reminds you until you do); the new one is stored hashed in the volume and wins from then on. Olares normally does the login; here the container asks for HTTP Basic auth and refuses to start without `OMUSE_PASSWORD`. Before opening the port to the internet, put HTTPS in front (Cloudflare Tunnel, Tailscale Funnel, Caddy, …) — Basic auth over plain HTTP sends the password in the clear. `OMUSE_MODEL_API_KEY` is sent as a Bearer token to the model endpoint and is never stored in Settings. A user may instead switch on "Use my own model" in Settings → Models and enter their own endpoint, API key and model names; switched off, the system's values apply again and the entered ones are ignored. The user's own key is kept in the runtime database (never shown again) and is only ever sent to the user's own endpoint. Add `-p 8083:8083` only if you use the Telnyx phone line.
 
 **Configuration.** Instead of `-e` flags you can keep the settings in a file on the host and pass it with `--env-file` (one `NAME=value` per line, no quotes; keep it out of git, it holds your password and API key):
 
@@ -85,11 +85,11 @@ Docker reads the file when the container is created: after editing it, `docker r
 | `OMUSE_PASSWORD` | Login password (required) |
 | `OMUSE_USER` | Login name (default `omuse`) |
 | `OMUSE_AUTH=off` | No login — only behind another proxy that already authenticates |
-| `OMUSE_MODEL_URL`, `OMUSE_MODEL` | OpenAI-compatible endpoint and model id (defaults; a value saved in Settings wins) |
+| `OMUSE_MODEL_URL`, `OMUSE_MODEL` | The system's OpenAI-compatible endpoint and model id. A user can switch to their own endpoint, key and models in Settings → Models ("Use my own model") |
 | `OMUSE_SKILLS` | Optional, comma-separated skill names that are on when a fresh data volume is set up (e.g. `online-shopping,reply-email`); unset = every skill. Only read at that first start: afterwards the selection saved on the Skills page rules and the variable is ignored |
-| `OMUSE_PLANNER_MODEL`, `OMUSE_VISION_MODEL`, `OMUSE_STT_MODEL`, `OMUSE_IMAGE_MODEL` | Optional model ids for planning, vision (screenshots, images), speech-to-text and image generation on the same endpoint. Unset: planner and vision use `OMUSE_MODEL`, speech-to-text uses a whisper-like model if the endpoint has one, images auto-pick an image model. A value saved in Settings wins |
+| `OMUSE_PLANNER_MODEL`, `OMUSE_VISION_MODEL`, `OMUSE_STT_MODEL`, `OMUSE_IMAGE_MODEL` | Optional model ids for planning, vision (screenshots, images), speech-to-text and image generation on the same endpoint. Unset: planner and vision use `OMUSE_MODEL`, speech-to-text uses a whisper-like model if the endpoint has one, images auto-pick an image model. A user who switches on their own model in Settings sets their own names instead |
 | `OMUSE_IMAGE_URL`, `OMUSE_IMAGE_API_KEY` | Advanced: a separate OpenAI-Images-compatible endpoint and key for image generation; unset = the model endpoint and its key |
-| `OMUSE_MODEL_API_KEY` | API key for the model endpoint (environment only, not in Settings) |
+| `OMUSE_MODEL_API_KEY` | The system's API key for the model endpoint (environment only, never shown in Settings and never sent to a user's own endpoint) |
 | `TZ` | Default timezone (a value saved in Settings wins) |
 | `TELEGRAM_BOT=0`, `VOICE_PORT=0` | Turn off the Telegram bot / the phone port |
 | `BROWSER_HEADLESS=1` | Run the browser headless instead of on the virtual display |
