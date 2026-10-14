@@ -32,18 +32,20 @@ async def main():
         fold = pg.locator("details.taskfold").last
         check("the finished task's plan is folded", not await fold.evaluate("d => d.open"))
         check("...only its one-line head shows, with the status and step count", await fold.locator("summary .pill").is_visible()
-              and "步" in await fold.locator("summary").inner_text(), await fold.locator("summary").inner_text())
+              and "步" in await fold.locator(":scope > summary").inner_text(), await fold.locator(":scope > summary").inner_text())
         check("...the plan and the activity are hidden", not await fold.locator("ol.plan").is_visible() and not await fold.locator("details.trace summary").is_visible())
         check("the answer is shown", await pg.locator(".msg.assistant .bubble").last.is_visible())
-        await fold.locator("summary").click()
+        await fold.locator(":scope > summary").click()
         check("a tap opens the plan", await fold.evaluate("d => d.open") and await fold.locator("ol.plan").is_visible())
-        # a re-render of the card (e.g. a task update) keeps it open
-        await pg.evaluate("() => { const id = document.querySelector('details.taskfold').closest('.taskcard').id.slice(3); "
-                          "document.getElementById('tc-' + id).parentElement.replaceWith(taskCard(S.tasks[id])); }")
-        check("...and it stays open when the card re-renders", await pg.locator("details.taskfold").last.evaluate("d => d.open"))
+        # a re-render of the card (a second message in the same chat redraws the timeline) keeps it open
+        await pg.fill("#chatInput", "再来一次 fold test 2")
+        await pg.keyboard.press("Enter")
+        await pg.wait_for_function("() => document.querySelectorAll('details.taskfold').length >= 2 && document.querySelectorAll('.msg.assistant .bubble').length >= 2", timeout=60000)
+        check("...and it stays open when the card re-renders", await pg.locator("details.taskfold").first.evaluate("d => d.open"))
+        check("...while the next finished task starts folded", not await pg.locator("details.taskfold").last.evaluate("d => d.open"))
         await pg.reload()
         await pg.wait_for_selector("details.taskfold", timeout=20000)
-        check("after a reload it is folded again", not await pg.locator("details.taskfold").last.evaluate("d => d.open"))
+        check("after a reload it is folded again", not await pg.locator("details.taskfold").first.evaluate("d => d.open"))
         check("no page errors", not errs, errs)
         await b.close()
     print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))

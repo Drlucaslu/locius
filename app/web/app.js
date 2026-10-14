@@ -2415,8 +2415,8 @@ function onEvent(ev) {
     const t = ev.task; mergeTasks({ [t.id]: t });
     renderNav();
     const card = document.getElementById('tc-' + t.id);
-    if (card && S.view === 'chat') { const fresh = taskCard(S.tasks[t.id]); const det = card.querySelector('details'); const wasOpen = det && det.open;
-      card.parentElement.replaceWith(fresh); if (wasOpen) { const d2 = fresh.querySelector('details'); d2.open = true; } }
+    if (card && S.view === 'chat') { const fresh = taskCard(S.tasks[t.id]); const det = card.querySelector('details.trace'); const wasOpen = det && det.open;
+      card.parentElement.replaceWith(fresh); if (wasOpen) { const d2 = fresh.querySelector('details.trace'); if (d2) d2.open = true; } }
     if (S.view === 'tasks' && S.selTask === t.id) { const box = $('#taskDetail'); if (box) renderTaskDetail(box, t.id); }
     if (t.status === 'COMPLETED' && t.source === 'schedule') toast(Tf("⏰ 定时任务完成：{0}", (t.goal.slice(0, 40))));
   } else if (ev.kind === 'task_event') {

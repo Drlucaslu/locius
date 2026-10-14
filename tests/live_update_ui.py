@@ -30,6 +30,7 @@ async def scenario(p, name, route_stream):
     deny_pending()
     b = await p.chromium.launch()
     pg = await b.new_page(viewport={"width": 1280, "height": 800})
+    await pg.clock.install()   # to spin the verb (a 3.5 s interval) without waiting for it
     errs = []
     pg.on("pageerror", lambda e: errs.append(str(e)))
     if route_stream:
@@ -40,19 +41,25 @@ async def scenario(p, name, route_stream):
     await pg.fill("#chatInput", "BROWSE the shop " + name)
     await pg.keyboard.press("Enter")
     got = None
-    verbs = set()
+    verbs, titles, spun = set(), set(), None
+    get_verbs = "() => [...document.querySelectorAll('.taskcard .typing.verb')].map(e => [e.textContent, e.title])"
     for _ in range(40):
         await pg.wait_for_timeout(500)
-        verbs.update(await pg.evaluate("() => [...document.querySelectorAll('.taskcard .typing.verb')].map(e => e.textContent)"))
+        seen = await pg.evaluate(get_verbs)
+        verbs.update(v for v, _t in seen); titles.update(t for _v, t in seen)
+        if seen and spun is None:   # 3.5 s later the card shows another verb
+            await pg.clock.run_for(3600)
+            after = await pg.evaluate(get_verbs)
+            spun = (seen[0][0], after[0][0] if after else None)
         st = await card_state(pg)
         if st and st[-1]["approve"]:
             got = st[-1]
             break
     check(f"{name}: card shows the approval without a reload", got is not None, await card_state(pg))
-    words = set(await pg.evaluate("() => VERBS[LANG] || VERBS.en"))
-    check(f"{name}: while working the card shows a fun verb from the list", verbs and verbs <= words, verbs)
-    a, b2 = await pg.evaluate("() => [pickVerb(), pickVerb()]")
-    check(f"{name}: the verb changes", a != b2 and a in words and b2 in words, (a, b2))
+    flat = {"规划中", "执行中", "規劃中", "執行中", "Planning", "Running"}
+    check(f"{name}: while working the card shows a fun verb, not the flat state", verbs and all(v and v not in flat for v in verbs), verbs)
+    check(f"{name}: ...and the real state in its tooltip", titles and titles <= flat, titles)
+    check(f"{name}: the verb changes", spun and spun[1] and spun[0] != spun[1], spun)
     check(f"{name}: no page errors", not errs, errs)
     await b.close()
 
