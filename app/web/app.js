@@ -566,23 +566,59 @@ function planList(plan) {
     h('span', { class: 'mk' }, mk[s.status || 'pending'] || '○'), h('span', { class: 'tx' }, s.description))));
 }
 
+// While a task card is planning or running it shows a random verb (a new one every few seconds, like a terminal
+// spinner) instead of a flat "running"; the status pill next to it keeps the real state.
+const VERBS = {
+  zh: ['琢磨中', '冥思苦想中', '掐指一算中', '翻箱倒柜中', '抓耳挠腮中', '运筹帷幄中', '埋头苦干中', '东奔西走中', '查漏补缺中', '打探消息中',  // i18n-ok
+    '精打细算中', '酝酿中', '敲敲打打中', '整理思路中', '推敲中', '盘算中', '捣鼓中', '搜肠刮肚中', '穿针引线中', '排兵布阵中',  // i18n-ok
+    '深思熟虑中', '摩拳擦掌中', '抽丝剥茧中', '按图索骥中', '见缝插针中', '顺藤摸瓜中', '明察秋毫中', '奋笔疾书中', '绞尽脑汁中', '灵光乍现中'],  // i18n-ok
+  tw: ['琢磨中', '冥思苦想中', '掐指一算中', '翻箱倒櫃中', '抓耳撓腮中', '運籌帷幄中', '埋頭苦幹中', '東奔西走中', '查漏補缺中', '打探消息中',  // i18n-ok
+    '精打細算中', '醞釀中', '敲敲打打中', '整理思路中', '推敲中', '盤算中', '搗鼓中', '搜腸刮肚中', '穿針引線中', '排兵布陣中',  // i18n-ok
+    '深思熟慮中', '摩拳擦掌中', '抽絲剝繭中', '按圖索驥中', '見縫插針中', '順藤摸瓜中', '明察秋毫中', '奮筆疾書中', '絞盡腦汁中', '靈光乍現中'],  // i18n-ok
+  en: ['Pondering', 'Cogitating', 'Musing', 'Mulling', 'Noodling', 'Tinkering', 'Brewing', 'Percolating', 'Simmering', 'Marinating',
+    'Scheming', 'Plotting', 'Conjuring', 'Rummaging', 'Sleuthing', 'Puzzling', 'Crunching', 'Weaving', 'Hatching', 'Deliberating',
+    'Untangling', 'Wrangling', 'Scouting', 'Foraging', 'Composing', 'Whirring', 'Humming', 'Orchestrating', 'Summoning', 'Divining',
+    'Ruminating', 'Contemplating', 'Calibrating', 'Assembling', 'Juggling', 'Reckoning', 'Sifting', 'Combing', 'Spelunking', 'Moseying'],
+};
+let verbNow = '';
+function pickVerb() {
+  const list = VERBS[LANG] || VERBS.en;
+  let v = verbNow;
+  while (v === verbNow && list.length > 1) v = list[Math.floor(Math.random() * list.length)];
+  verbNow = v;
+  return v;
+}
+setInterval(() => {
+  const spans = document.querySelectorAll('.typing.verb');
+  if (!spans.length) return;
+  const v = pickVerb();
+  spans.forEach(sp => { sp.textContent = v; });
+}, 3500);
+
 function taskCard(t) {
   const active = !['COMPLETED', 'FAILED', 'CANCELLED'].includes(t.status);
-  const card = h('div', { class: 'msg' }, h('div', { class: 'taskcard', id: 'tc-' + t.id },
-    h('div', { class: 'head' }, pill(t.status),
-      h('span', { class: 'goal', title: t.goal }, t.plan && t.plan.objective ? t.plan.objective : t.goal),
-      active && t.status !== 'WAITING_APPROVAL' ? h('span', { class: 'typing dots' }, t.status === 'PLANNING' ? T('规划中') : T('执行中')) : null,
-      active ? h('span', { class: 'small retry', style: 'color:var(--warn)', hidden: true }) : null,
-      h('a', { class: 'small', href: '#tasks/' + t.id }, T('详情 Details'))),
-    planList(t.plan),
+  const steps = t.plan && t.plan.steps ? t.plan.steps.length : 0;
+  const head = h('div', { class: 'head' }, pill(t.status),
+    h('span', { class: 'goal', title: t.goal }, t.plan && t.plan.objective ? t.plan.objective : t.goal),
+    active && t.status !== 'WAITING_APPROVAL' ? h('span', { class: 'typing dots verb', title: t.status === 'PLANNING' ? T('规划中') : T('执行中') }, verbNow || pickVerb()) : null,
+    active ? h('span', { class: 'small retry', style: 'color:var(--warn)', hidden: true }) : null,
+    !active && steps ? h('span', { class: 'small faint' }, Tf("{0} 步", steps)) : null,
+    h('a', { class: 'small', href: '#tasks/' + t.id, onclick: e => { e.preventDefault(); location.hash = '#tasks/' + t.id; } }, T('详情 Details')));   // inside a <summary>: must not toggle the fold
+  const body = [planList(t.plan),
     t.status === 'WAITING_APPROVAL' && t.waiting ? h('div', { class: 'row', style: 'margin-top:8px' },
       h('button', { class: 'btn approve small', onclick: () => openApproval(t.waiting.approval_id) }, T('🛡 审批：') + ((t.waiting.summary || {}).title || '')))
       : null,
     t.status === 'WAITING_EXTERNAL' ? h('div', { class: 'row', style: 'margin-top:8px' },
       h('a', { class: 'btn small', href: '#browser/' + t.id }, T('🖐 去浏览器接管 Take over'))) : null,
     t.status === 'FAILED' && t.error ? h('p', { class: 'small', style: 'color:var(--danger);margin:8px 0 0' }, t.error) : null,
-    traceBox(t)));
-  return card;
+    traceBox(t)];
+  if (active) return h('div', { class: 'msg' }, h('div', { class: 'taskcard', id: 'tc-' + t.id }, head, ...body));
+  // finished: the plan folds away under its one-line head so the timeline shows the answer; a tap opens it again
+  // (what the user opened stays open across the card's re-renders in this page)
+  S.fold = S.fold || {};
+  const det = h('details', { class: 'taskfold', open: !!S.fold[t.id] }, h('summary', null, head), ...body);
+  det.addEventListener('toggle', () => { S.fold[t.id] = det.open; });
+  return h('div', { class: 'msg' }, h('div', { class: 'taskcard folded', id: 'tc-' + t.id }, det));
 }
 
 function traceBox(t) {
@@ -2379,8 +2415,8 @@ function onEvent(ev) {
     const t = ev.task; mergeTasks({ [t.id]: t });
     renderNav();
     const card = document.getElementById('tc-' + t.id);
-    if (card && S.view === 'chat') { const fresh = taskCard(S.tasks[t.id]); const det = card.querySelector('details'); const wasOpen = det && det.open;
-      card.parentElement.replaceWith(fresh); if (wasOpen) { const d2 = fresh.querySelector('details'); d2.open = true; } }
+    if (card && S.view === 'chat') { const fresh = taskCard(S.tasks[t.id]); const det = card.querySelector('details.trace'); const wasOpen = det && det.open;
+      card.parentElement.replaceWith(fresh); if (wasOpen) { const d2 = fresh.querySelector('details.trace'); if (d2) d2.open = true; } }
     if (S.view === 'tasks' && S.selTask === t.id) { const box = $('#taskDetail'); if (box) renderTaskDetail(box, t.id); }
     if (t.status === 'COMPLETED' && t.source === 'schedule') toast(Tf("⏰ 定时任务完成：{0}", (t.goal.slice(0, 40))));
   } else if (ev.kind === 'task_event') {

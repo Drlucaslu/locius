@@ -960,5 +960,6 @@ window.OMUSE_EN = {
 "请填写执行任务的 LLM 模型名": "Enter the LLM model name",
 "自己的模型 Own model": "Own model",
 "登录名 {0}。改完后所有浏览器都要用新密码重新登录。": "User {0}. After a change, every browser has to sign in again with the new password.",
-"退出登录 Sign out": "Sign out"
+"退出登录 Sign out": "Sign out",
+"{0} 步": "{0} steps"
 };

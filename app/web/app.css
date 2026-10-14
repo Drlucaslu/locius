@@ -150,6 +150,14 @@ label.field .req { color: var(--danger); font-weight: 700; }
 .plan li.done .mk { color: var(--ok); } .plan li.running .mk { color: var(--accent); } .plan li.failed .mk { color: var(--danger); }
 .plan li.done .tx { color: var(--muted); }
 details.trace { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
+/* a finished task: the plan folded under its head; tap to open */
+.taskcard.folded { padding: 0; }
+.taskfold > summary { list-style: none; cursor: pointer; padding: 10px 14px; }
+.taskfold > summary::-webkit-details-marker { display: none; }
+.taskfold > summary .head::before { content: '▸'; color: var(--faint); font-size: 12px; flex: none; }
+.taskfold[open] > summary .head::before { content: '▾'; }
+.taskfold > :not(summary) { margin-left: 14px; margin-right: 14px; }
+.taskfold[open] { padding-bottom: 12px; }
 details.trace summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 .timeline { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .ev { font-size: 12.5px; display: grid; grid-template-columns: 64px 1fr; gap: 8px; }
