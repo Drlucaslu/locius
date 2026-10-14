@@ -40,13 +40,19 @@ async def scenario(p, name, route_stream):
     await pg.fill("#chatInput", "BROWSE the shop " + name)
     await pg.keyboard.press("Enter")
     got = None
+    verbs = set()
     for _ in range(40):
         await pg.wait_for_timeout(500)
+        verbs.update(await pg.evaluate("() => [...document.querySelectorAll('.taskcard .typing.verb')].map(e => e.textContent)"))
         st = await card_state(pg)
         if st and st[-1]["approve"]:
             got = st[-1]
             break
     check(f"{name}: card shows the approval without a reload", got is not None, await card_state(pg))
+    words = set(await pg.evaluate("() => VERBS[LANG] || VERBS.en"))
+    check(f"{name}: while working the card shows a fun verb from the list", verbs and verbs <= words, verbs)
+    a, b2 = await pg.evaluate("() => [pickVerb(), pickVerb()]")
+    check(f"{name}: the verb changes", a != b2 and a in words and b2 in words, (a, b2))
     check(f"{name}: no page errors", not errs, errs)
     await b.close()
 

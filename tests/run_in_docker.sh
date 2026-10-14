@@ -5,6 +5,7 @@
 #   bash tests/run_in_docker.sh                 # every suite (about 15 minutes)
 #   bash tests/run_in_docker.sh e2e_027 mcp_e2e # only these
 # OMUSE_IMAGE picks the image (default: omuse, built from the Dockerfile when missing). Exit code 1 if a suite fails.
+# OMUSE_TEST_OFFLINE=1 skips the apt/pip step inside the container (no network: the mail suites then have no IMAP server).
 # docker_browser_e2e.py is not part of this: it needs a real model (see its docstring).
 set -u
 if [ "${1:-}" != "--inside" ]; then
@@ -13,7 +14,7 @@ if [ "${1:-}" != "--inside" ]; then
   docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" . || exit 1
   # root: apt installs Dovecot. Empty OMUSE_MODEL*: the image defaults would override the stack's fake model.
   # shop.test / opentable.test: the hostnames the test pages are served under.
-  exec docker run --rm --user 0 -e OMUSE_MODEL_URL= -e OMUSE_MODEL= -e VOICE_PORT= \
+  exec docker run --rm --user 0 -e OMUSE_MODEL_URL= -e OMUSE_MODEL= -e VOICE_PORT= -e OMUSE_TEST_OFFLINE \
     --add-host shop.test:127.0.0.1 --add-host opentable.test:127.0.0.1 \
     -v "$PWD":/repo:ro --entrypoint bash "$IMAGE" /repo/tests/run_in_docker.sh --inside "$@"
 fi
@@ -21,12 +22,14 @@ shift
 
 cp -r /repo /src && cd /src && rm -rf dist
 # test-only dependencies (not in requirements.txt): IMAP server for the mail suites, form parsing for the fake services
-(apt-get update -qq && apt-get install -y -qq dovecot-imapd psmisc) >/dev/null 2>&1 || echo "WARNING: could not install dovecot"
-pip install -q --break-system-packages pytest aiosmtpd python-multipart >/dev/null 2>&1 || echo "WARNING: pip install failed"
 mkdir -p /tmp/claude-0 /srv/dove/run /srv/dove/mail
-cp tests/dovecot.conf /srv/dove/; cp tests/dovecot-oauth2.conf /srv/dove/oauth2.conf
-echo "tester@example.com:{PLAIN}secretpass123" > /srv/dove/users; chown -R nobody:nogroup /srv/dove/mail
-dovecot -c /srv/dove/dovecot.conf || echo "WARNING: dovecot did not start"
+if [ -z "${OMUSE_TEST_OFFLINE:-}" ]; then
+  (apt-get update -qq && apt-get install -y -qq dovecot-imapd psmisc) >/dev/null 2>&1 || echo "WARNING: could not install dovecot"
+  pip install -q --break-system-packages pytest aiosmtpd python-multipart >/dev/null 2>&1 || echo "WARNING: pip install failed"
+  cp tests/dovecot.conf /srv/dove/; cp tests/dovecot-oauth2.conf /srv/dove/oauth2.conf
+  echo "tester@example.com:{PLAIN}secretpass123" > /srv/dove/users; chown -R nobody:nogroup /srv/dove/mail
+  dovecot -c /srv/dove/dovecot.conf || echo "WARNING: dovecot did not start"
+fi
 export PYTHONPATH=/src
 
 if [ $# -gt 0 ]; then
