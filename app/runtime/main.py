@@ -772,6 +772,8 @@ async def put_settings(req: Request):
         b["model_override"] = False
     if "model_api_key" in b and not str(b["model_api_key"] or "").strip():
         b.pop("model_api_key")     # an empty key field means "keep the saved one"
+    if "instance_name" in b:       # one line, at most 40 characters; blank = the default
+        b["instance_name"] = " ".join(str(b["instance_name"] or "").split())[:40] or "OMuse"
     s = rt.store.set_settings(b)
     from app.runtime.store import redacted
     detail = {k: ("(set)" if k == "model_api_key" else v) for k, v in b.items()}   # the key itself is never logged
