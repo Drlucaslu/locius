@@ -39,6 +39,15 @@ function applyTheme(t) {
   if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
   try { localStorage.setItem('omuse_theme', t); } catch (e) { /* ignore */ }
 }
+// The install's name (Settings → Interface → Name) is shown next to the logo and in the tab title; localStorage caches
+// it for the first paint. S.name is what the rest of the UI reads.
+function applyName(n) {
+  n = String(n || '').trim() || 'OMuse';
+  S.name = n;
+  $('.brand b').textContent = n;
+  document.title = document.title.startsWith('(') ? document.title.replace(/\) .*$/, ') ' + n) : n;
+  try { localStorage.setItem('omuse_name', n); } catch (e) { /* ignore */ }
+}
 // Settings decide the UI language (ui_language; "" = follow the browser) and the theme. The agent's own language
 // (language) is separate; on the first visit it is filled from the browser, so an English browser gets an English agent.
 async function syncLang() {
@@ -46,6 +55,7 @@ async function syncLang() {
     const r = await api('settings');
     const s = r.settings || {};
     applyTheme(s.theme);
+    applyName(s.instance_name);
     const want = UI_LANGS.includes(s.ui_language) ? s.ui_language : browserLang();
     try { localStorage.setItem('omuse_ui', want); } catch (e) { /* ignore */ }
     if (want !== LANG) { location.reload(); return; }
@@ -131,7 +141,7 @@ const safe = fn => async (...a) => { try { return await fn(...a); } catch (e) { 
 
 // ------------------------------------------------------------------ state
 const S = {
-  view: 'chat', conv: null, convs: [], convData: null, tasks: {}, events: {}, approvals: [], selTask: null,
+  view: 'chat', conv: null, convs: [], convData: null, tasks: {}, events: {}, approvals: [], selTask: null, name: 'OMuse',
   settings: null, browserTimer: null, taskFilter: '', auditTask: '', seenApprovals: new Set(), sending: false,
 };
 
@@ -869,7 +879,7 @@ async function loadApprovals() {
   const fresh = S.approvals.filter(a => !S.seenApprovals.has(a.id));
   fresh.forEach(a => S.seenApprovals.add(a.id));
   if (fresh.length && !$('.modal-back')) openApproval(fresh[0].id);
-  document.title = n ? `(${n}) OMuse` : 'OMuse';
+  document.title = n ? `(${n}) ${S.name}` : S.name;
 }
 
 function approvalForm(a, onDone) {
@@ -2311,6 +2321,7 @@ async function viewSettings(root) {
     await api('settings', { method: 'PUT', body }); toast(T('已保存 Saved')); refreshModelChip();
     if (body.model_override && body.model_api_key) { mu.api_key_set = true; keyIn.value = ''; keyIn.placeholder = T('已保存；留空=不改'); }
     applyTheme(body.theme);
+    applyName(body.instance_name); f.instance_name.value = S.name;
     const want = UI_LANGS.includes(body.ui_language) ? body.ui_language : browserLang();
     if (want !== LANG) { try { localStorage.setItem('omuse_ui', want); } catch (e) { /* ignore */ } location.reload(); }
   }) }, T('保存设置 Save settings'))));
@@ -2384,7 +2395,11 @@ function interfaceCard(s, f) {
     h('option', { value: 'ink' }, T('Ink（深色）')));
   th.value = s.theme === 'ink' || s.theme === 'paper' ? s.theme : 'auto';
   f.theme = th;
+  const name = h('input', { type: 'text', value: s.instance_name || '', placeholder: 'OMuse', maxlength: '40', 'aria-label': 'Name' });
+  f.instance_name = name;
   return h('div', { class: 'card stack', id: 'interface' }, h('h3', null, T('🖥 界面 Interface')),
+    h('label', { class: 'field' }, h('span', null, T('名称'), LANG === 'en' ? null : h('span', { class: 'muted' }, ' Name')), name,
+      h('div', { class: 'small muted', style: 'font-weight:400' }, T('这台 OMuse 的名字，显示在左上角 logo 旁和浏览器标签页上。留空 = OMuse。'))),
     h('label', { class: 'field' }, h('span', null, T('界面语言'), LANG === 'en' ? null : h('span', { class: 'muted' }, ' UI language')), ui,
       h('div', { class: 'small muted', style: 'font-weight:400' }, T('只影响界面文字。「跟随浏览器」= 英文、简体或繁体浏览器各看各的；选定一种后，你在任何设备上登录都用它。'))),
     h('label', { class: 'field' }, h('span', null, T('外观'), LANG === 'en' ? null : h('span', { class: 'muted' }, ' Theme')), th));
@@ -2528,6 +2543,7 @@ document.addEventListener('keydown', e => {
 document.addEventListener('click', e => { const p = $('#histPop'); if (p && !p.contains(e.target) && !e.target.closest('.hist-btn')) closeHistory(); });
 window.addEventListener('hashchange', () => { route(); });
 i18nStatic();
+try { applyName(localStorage.getItem('omuse_name')); } catch (e) { S.name = 'OMuse'; }
 (async () => {
   await syncLang();
   try { const hs = await sapi('health'); $('#navfoot').textContent = Tf("v{0} · 专属计算机 · 私有上下文", (hs.version)); } catch (e) {}

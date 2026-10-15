@@ -3330,3 +3330,27 @@ def test_034_needs_id():
     assert not C.needs_id("生成一份出发前 7 天的待办清单并设置提醒")
     assert C.needs_id("帮我在线值机，填写旅客信息")
     assert C.needs_id("看看我的护照还有多久到期")
+
+
+@pytest.mark.asyncio
+async def test_settings_put_instance_name(tmp_path, monkeypatch):
+    """PUT /api/settings instance_name: one line, trimmed, at most 40 characters; blank = OMuse (the default)."""
+    from app.runtime import main as rmain, store as ST
+
+    class Req:
+        def __init__(self, b): self._b = b
+        async def json(self): return self._b
+
+    class _RT:
+        store = ST.RStore(str(tmp_path))
+        async def audit(self, actor, action, task_id="", **kw): pass
+    monkeypatch.setattr(rmain, "rt", _RT())
+    assert _RT.store.settings()["instance_name"] == "OMuse"
+    r = await rmain.put_settings(Req({"instance_name": "  Jarvis \n at home  "}))
+    assert r["settings"]["instance_name"] == "Jarvis at home"
+    r = await rmain.put_settings(Req({"instance_name": "n" * 50}))
+    assert r["settings"]["instance_name"] == "n" * 40
+    r = await rmain.put_settings(Req({"instance_name": "   "}))
+    assert r["settings"]["instance_name"] == "OMuse"
+    r = await rmain.put_settings(Req({"instance_name": None}))
+    assert r["settings"]["instance_name"] == "OMuse"

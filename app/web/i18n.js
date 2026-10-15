@@ -961,5 +961,7 @@ window.OMUSE_EN = {
 "自己的模型 Own model": "Own model",
 "登录名 {0}。改完后所有浏览器都要用新密码重新登录。": "User {0}. After a change, every browser has to sign in again with the new password.",
 "退出登录 Sign out": "Sign out",
-"{0} 步": "{0} steps"
+"{0} 步": "{0} steps",
+"名称": "Name",
+"这台 OMuse 的名字，显示在左上角 logo 旁和浏览器标签页上。留空 = OMuse。": "This install's name, shown next to the logo and in the browser tab. Blank = OMuse."
 };
